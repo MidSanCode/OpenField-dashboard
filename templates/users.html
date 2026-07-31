@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}用户管理{% endblock %}
+{% block content %}
+<h2>用户管理</h2>
+<div style="display: flex; gap: 8px; align-items: center; margin-bottom: 12px;">
+  <form method="get" style="flex: 1;">
+    <input type="text" name="q" value="{{ query }}" placeholder="搜索用户名 / 昵称 / 邮箱">
+    <button type="submit">搜索</button>
+  </form>
+  <a class="btn" href="{{ url_for('user_new') }}">新建用户</a>
+</div>
+<div class="card" style="padding: 0;">
+  <table class="table">
+    <tr>
+      <th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>头像</th>
+      <th>角色</th><th>状态</th><th>创建时间</th><th>操作</th>
+    </tr>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.id }}</td>
+      <td>{{ u.username }}</td>
+      <td>{{ u.nickname }}</td>
+      <td>{{ u.email }}</td>
+      <td>
+        {% if u.avatar_url %}
+          <img class="img-thumb" src="{{ u.avatar_url }}" alt="avatar">
+        {% endif %}
+      </td>
+      <td><span class="badge {{ 'admin' if u.role == 'admin' else 'user' }}">{{ u.role }}</span></td>
+      <td>{% if u.needs_registration %}<span class="badge pending">待注册</span>{% else %}正常{% endif %}</td>
+      <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>
+        <form method="post" action="{{ url_for('user_role', user_id=u.id) }}" style="display: inline-block;">
+          <select name="role" onchange="this.form.submit()">
+            <option value="user" {{ 'selected' if u.role == 'user' }}>user</option>
+            <option value="admin" {{ 'selected' if u.role == 'admin' }}>admin</option>
+          </select>
+        </form>
+        <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}" style="display: inline-block;"
+              onsubmit="return confirm('确认删除用户 {{ u.username }}? 其帖子与消息将一并删除。')">
+          <button class="danger" type="submit">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

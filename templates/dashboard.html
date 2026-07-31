@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}仪表盘{% endblock %}
+{% block content %}
+<h2>仪表盘</h2>
+<div class="grid">
+  <div class="stat"><div class="num">{{ counts.users }}</div><div class="label">用户总数</div></div>
+  <div class="stat"><div class="num">{{ counts.admins }}</div><div class="label">管理员</div></div>
+  <div class="stat"><div class="num">{{ counts.pending }}</div><div class="label">待注册</div></div>
+  <div class="stat"><div class="num">{{ counts.posts }}</div><div class="label">帖子</div></div>
+  <div class="stat"><div class="num">{{ counts.messages }}</div><div class="label">消息</div></div>
+  <div class="stat"><div class="num">{{ counts.attachments }}</div><div class="label">附件</div></div>
+</div>
+
+<h3 style="margin-top: 24px;">最新用户</h3>
+<div class="card" style="padding: 0;">
+  <table class="table">
+    <tr><th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>角色</th><th>创建时间</th></tr>
+    {% for u in recent_users %}
+    <tr>
+      <td>{{ u.id }}</td><td>{{ u.username }}</td><td>{{ u.nickname }}</td><td>{{ u.email }}</td>
+      <td>
+        <span class="badge {{ 'admin' if u.role == 'admin' else 'user' }}">{{ u.role }}</span>
+        {% if u.needs_registration %}<span class="badge pending">待注册</span>{% endif %}
+      </td>
+      <td>{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+
+<h3 style="margin-top: 24px;">最新帖子</h3>
+<div class="card" style="padding: 0;">
+  <table class="table">
+    <tr><th>ID</th><th>作者</th><th>内容</th><th>时间</th></tr>
+    {% for p in recent_posts %}
+    <tr>
+      <td>{{ p.id }}</td><td>{{ p.username }}</td>
+      <td style="max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ p.content }}</td>
+      <td>{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endblock %}

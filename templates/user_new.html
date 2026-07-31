@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}新建用户{% endblock %}
+{% block content %}
+<h2>新建用户</h2>
+<div class="card" style="max-width: 460px;">
+  <form method="post">
+    <div>
+      <label>用户名 (登录用, 唯一)</label><br>
+      <input type="text" name="username" required style="width: 100%;">
+    </div>
+    <div style="margin-top: 12px;">
+      <label>昵称 (显示用)</label><br>
+      <input type="text" name="nickname" required style="width: 100%;">
+    </div>
+    <div style="margin-top: 12px;">
+      <label>邮箱 (可选)</label><br>
+      <input type="email" name="email" style="width: 100%;">
+    </div>
+    <div style="margin-top: 12px;">
+      <label>密码 (账密登录)</label><br>
+      <input type="password" name="password" required style="width: 100%;">
+    </div>
+    <div style="margin-top: 12px;">
+      <label>角色</label><br>
+      <select name="role">
+        <option value="user">user (普通用户)</option>
+        <option value="admin">admin (管理员)</option>
+      </select>
+    </div>
+    <div style="margin-top: 16px;">
+      <button type="submit">创建</button>
+      <a class="btn" href="{{ url_for('users') }}">返回</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

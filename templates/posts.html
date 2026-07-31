@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}帖子管理{% endblock %}
+{% block content %}
+<h2>帖子管理</h2>
+<div class="card" style="padding: 0;">
+  <table class="table">
+    <tr>
+      <th>ID</th><th>作者</th><th>内容</th><th>附件数</th><th>时间</th><th>操作</th>
+    </tr>
+    {% for p in posts %}
+    <tr>
+      <td>{{ p.id }}</td>
+      <td>{{ p.username }}</td>
+      <td style="max-width: 400px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">{{ p.content }}</td>
+      <td>{{ p.attachment_count }}</td>
+      <td>{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>
+        <form method="post" action="{{ url_for('post_delete', post_id=p.id) }}"
+              onsubmit="return confirm('确认删除帖子 #{{ p.id }}?')">
+          <button class="danger" type="submit">删除</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+<div class="pagination">
+  {% if page > 1 %}<a href="?page={{ page - 1 }}">上一页</a>{% endif %}
+  <span class="muted">第 {{ page }} 页 / 共 {{ (total / per_page) | round(0, 'ceil') | int }} 页</span>
+  {% if page * per_page < total %}<a href="?page={{ page + 1 }}">下一页</a>{% endif %}
+</div>
+{% endblock %}
