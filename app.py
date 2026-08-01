@@ -189,9 +189,47 @@ def user_role(user_id):
     return redirect(url_for("users"))
 
 
+@app.route("/admins")
+@login_required
+def admins():
+    admins = db.fetch_all(
+        "SELECT id, username, can_verify, created_at FROM admin_accounts ORDER BY id ASC"
+    )
+    return render_template("admins.html", admins=admins)
+
+
+@app.route("/admins/<int:admin_id>/can-verify", methods=["POST"])
+@login_required
+def admin_can_verify(admin_id):
+    current = db.fetch_one(
+        "SELECT can_verify FROM admin_accounts WHERE id = %s",
+        (session.get("admin_id"),),
+    )
+    if not current or not current.get("can_verify"):
+        flash("You do not have permission to manage verifiers.", "error")
+        return redirect(url_for("admins"))
+    admin = db.fetch_one("SELECT id FROM admin_accounts WHERE id = %s", (admin_id,))
+    if not admin:
+        abort(404)
+    can_verify = request.form.get("can_verify") == "1"
+    db.execute(
+        "UPDATE admin_accounts SET can_verify = %s WHERE id = %s",
+        (can_verify, admin_id),
+    )
+    flash("Verifier permission updated.", "success")
+    return redirect(url_for("admins"))
+
+
 @app.route("/users/<int:user_id>/verified", methods=["POST"])
 @login_required
 def user_verified(user_id):
+    admin = db.fetch_one(
+        "SELECT can_verify FROM admin_accounts WHERE id = %s",
+        (session.get("admin_id"),),
+    )
+    if not admin or not admin.get("can_verify"):
+        flash("You do not have permission to verify users.", "error")
+        return redirect(url_for("users"))
     user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
         abort(404)

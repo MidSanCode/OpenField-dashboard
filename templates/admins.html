@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}认证者管理{% endblock %}
+{% block content %}
+<h2 class="page-title"><i class="bi bi-person-check me-2 text-primary"></i>认证者管理</h2>
+<p class="text-muted mb-3">只有勾选了“可认证”的管理员才能为用户发放认证标记。</p>
+<div class="card table-card">
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>用户名</th>
+          <th>可认证</th>
+          <th>创建时间</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in admins %}
+        <tr>
+          <td class="text-muted">{{ a.id }}</td>
+          <td class="fw-medium">{{ a.username }}</td>
+          <td>
+                <form method="post" action="{{ url_for('admin_can_verify', admin_id=a.id) }}" class="d-inline">
+              <div class="form-check form-switch m-0">
+                <input type="hidden" name="can_verify" value="0">
+                <input type="checkbox" class="form-check-input" name="can_verify" value="1"
+                       {{ 'checked' if a.can_verify }} onchange="this.form.submit()">
+              </div>
+            </form>
+          </td>
+          <td class="text-muted">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="4" class="text-center text-muted py-4">暂无管理员</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
