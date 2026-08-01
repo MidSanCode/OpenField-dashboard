@@ -234,9 +234,11 @@ def user_verified(user_id):
     if not user:
         abort(404)
     verified = request.form.get("verified") == "1"
+    verified_by = request.form.get("verified_by", "").strip()
+    verified_note = request.form.get("verified_note", "").strip()
     db.execute(
-        "UPDATE users SET is_verified = %s, updated_at = NOW() WHERE id = %s",
-        (verified, user_id),
+        "UPDATE users SET is_verified = %s, verified_by = %s, verified_note = %s, updated_at = NOW() WHERE id = %s",
+        (verified, verified_by, verified_note, user_id),
     )
     flash("Verified status updated.", "success")
     return redirect(url_for("users"))

@@ -53,6 +53,41 @@
                        {{ 'checked' if u.is_verified }} onchange="this.form.submit()">
               </div>
             </form>
+            <button class="btn btn-sm btn-outline-primary mt-1" data-bs-toggle="modal" data-bs-target="#verifyModal{{ u.id }}" title="编辑认证详情">
+              <i class="bi bi-pencil"></i>
+            </button>
+            {% if u.is_verified and u.verified_note %}
+            <div class="small text-muted mt-1" style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ u.verified_note }}">
+              {{ u.verified_note[:40] }}{% if u.verified_note|length > 40 %}...{% endif %}
+            </div>
+            {% endif %}
+            <div class="modal fade" id="verifyModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+              <div class="modal-dialog">
+                <div class="modal-content">
+                  <form method="post" action="{{ url_for('user_verified', user_id=u.id) }}">
+                    <div class="modal-header">
+                      <h5 class="modal-title"><i class="bi bi-patch-check me-2"></i>认证：{{ u.username }}</h5>
+                      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                      <div class="mb-3">
+                        <label class="form-label">认证对象</label>
+                        <input type="text" class="form-control" name="verified_by" value="{{ u.verified_by or '' }}" placeholder="例如：知名博主、官方账号">
+                      </div>
+                      <div class="mb-3">
+                        <label class="form-label">认证内容</label>
+                        <textarea class="form-control" name="verified_note" rows="3" placeholder="认证说明（展示在资料页）">{{ u.verified_note or '' }}</textarea>
+                      </div>
+                    </div>
+                    <div class="modal-footer">
+                      <input type="hidden" name="verified" value="{{ '1' if u.is_verified else '0' }}">
+                      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                      <button type="submit" class="btn btn-primary">保存认证</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
           </td>
           <td>
             {% if u.needs_registration %}
