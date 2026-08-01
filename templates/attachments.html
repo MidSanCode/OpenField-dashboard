@@ -1,35 +1,51 @@
 {% extends "base.html" %}
 {% block title %}附件管理{% endblock %}
 {% block content %}
-<h2>附件管理</h2>
-<div class="card" style="padding: 0;">
-  <table class="table">
-    <tr>
-      <th>ID</th><th>上传者</th><th>预览</th><th>文件名</th><th>类型</th>
-      <th>大小</th><th>被引用</th><th>时间</th><th>操作</th>
-    </tr>
-    {% for a in attachments %}
-    <tr>
-      <td>{{ a.id }}</td>
-      <td>{{ a.username }}</td>
-      <td>
-        {% if a.mime_type and a.mime_type.startswith('image/') %}
-          <a href="{{ a.url }}" target="_blank"><img class="img-thumb" src="{{ a.url }}" alt="preview"></a>
-        {% endif %}
-      </td>
-      <td><a href="{{ a.url }}" target="_blank">{{ a.original_name }}</a></td>
-      <td>{{ a.mime_type }}</td>
-      <td>{{ (a.size_bytes / 1024) | round(1) }} KB</td>
-      <td>{{ a.post_count }}</td>
-      <td>{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-      <td>
-        <form method="post" action="{{ url_for('attachment_delete', attachment_id=a.id) }}"
-              onsubmit="return confirm('确认删除附件 #{{ a.id }}?')">
-          <button class="danger" type="submit">删除</button>
-        </form>
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
+<h2 class="page-title"><i class="bi bi-paperclip me-2 text-primary"></i>附件管理</h2>
+<div class="card table-card">
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>ID</th><th>上传者</th><th>预览</th><th>文件名</th><th>类型</th>
+          <th>大小</th><th>被引用</th><th>时间</th><th class="text-end">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for a in attachments %}
+        <tr>
+          <td class="text-muted">{{ a.id }}</td>
+          <td class="fw-medium">{{ a.username }}</td>
+          <td>
+            {% if a.mime_type and a.mime_type.startswith('image/') %}
+              <a href="{{ a.url }}" target="_blank" title="查看大图">
+                <img class="img-thumb rounded-2" src="{{ a.url }}" alt="preview">
+              </a>
+            {% endif %}
+          </td>
+          <td><a href="{{ a.url }}" target="_blank" class="text-decoration-none">{{ a.original_name }}</a></td>
+          <td><span class="badge text-bg-light border">{{ a.mime_type or '-' }}</span></td>
+          <td class="text-muted">{{ (a.size_bytes / 1024) | round(1) }} KB</td>
+          <td>
+            <span class="badge {{ 'badge-soft-admin' if a.post_count else 'text-bg-light' }}">
+              {{ a.post_count }}
+            </span>
+          </td>
+          <td class="text-muted">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td class="text-end">
+            <form method="post" action="{{ url_for('attachment_delete', attachment_id=a.id) }}" class="d-inline"
+                  onsubmit="return confirm('确认删除附件 #{{ a.id }}?')">
+              <button class="btn btn-sm btn-outline-danger" type="submit" title="删除">
+                <i class="bi bi-trash"></i>
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center text-muted py-4">暂无附件</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endblock %}

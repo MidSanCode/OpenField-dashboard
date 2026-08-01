@@ -8,11 +8,11 @@ DB_NAME = os.getenv("ADMIN_DB_NAME", "openfield")
 DB_SSLMODE = os.getenv("ADMIN_DB_SSLMODE", "disable")
 
 RUSTFS_ENDPOINT = os.getenv("RUSTFS_ENDPOINT", "localhost:9000")
-RUSTFS_ACCESS_KEY = os.getenv("RUSTFS_ACCESS_KEY", "minioadmin")
-RUSTFS_SECRET_KEY = os.getenv("RUSTFS_SECRET_KEY", "minioadmin")
+RUSTFS_ACCESS_KEY = os.getenv("RUSTFS_ACCESS_KEY", "rustfsadmin")
+RUSTFS_SECRET_KEY = os.getenv("RUSTFS_SECRET_KEY", "rustfsadmin")
 RUSTFS_BUCKET = os.getenv("RUSTFS_BUCKET", "openfield")
 
-SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "admin-panel-secret-key-change-me")
+SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "test")
 
 SESSION_COOKIE_NAME = "openfield_admin"
 SESSION_COOKIE_HTTPONLY = True

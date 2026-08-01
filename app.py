@@ -100,21 +100,47 @@ def dashboard():
 @login_required
 def users():
     query = request.args.get("q", "").strip()
+    base_select = (
+        "SELECT u.id, u.username, u.nickname, u.email, u.avatar_url, u.role, "
+        "u.needs_registration, u.oauth2_provider, u.storage_quota, "
+        "u.created_at, "
+        "COALESCE((SELECT SUM(a.size_bytes) FROM attachments a WHERE a.user_id = u.id), 0) AS storage_used "
+        "FROM users u "
+    )
     if query:
         like = f"%{query}%"
         rows = db.fetch_all(
-            "SELECT id, username, nickname, email, avatar_url, role, needs_registration, "
-            "oauth2_provider, created_at FROM users "
-            "WHERE username ILIKE %s OR nickname ILIKE %s OR email ILIKE %s "
-            "ORDER BY created_at DESC",
+            base_select
+            + "WHERE u.username ILIKE %s OR u.nickname ILIKE %s OR u.email ILIKE %s "
+            "ORDER BY u.created_at DESC",
             (like, like, like),
         )
     else:
-        rows = db.fetch_all(
-            "SELECT id, username, nickname, email, avatar_url, role, needs_registration, "
-            "oauth2_provider, created_at FROM users ORDER BY created_at DESC"
-        )
+        rows = db.fetch_all(base_select + "ORDER BY u.created_at DESC")
     return render_template("users.html", users=rows, query=query)
+
+
+@app.route("/users/<int:user_id>/quota", methods=["POST"])
+@login_required
+def user_quota(user_id):
+    user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
+    try:
+        quota_mb = float(request.form.get("quota_mb", ""))
+    except ValueError:
+        flash("Invalid quota value.", "error")
+        return redirect(url_for("users"))
+    if quota_mb <= 0:
+        flash("Quota must be greater than 0.", "error")
+        return redirect(url_for("users"))
+    quota_bytes = int(quota_mb * 1024 * 1024)
+    db.execute(
+        "UPDATE users SET storage_quota = %s, updated_at = NOW() WHERE id = %s",
+        (quota_bytes, user_id),
+    )
+    flash("Storage quota updated.", "success")
+    return redirect(url_for("users"))
 
 
 @app.route("/users/new", methods=["GET", "POST"])
@@ -166,6 +192,9 @@ def user_role(user_id):
 @app.route("/users/<int:user_id>/reset-password", methods=["POST"])
 @login_required
 def user_reset_password(user_id):
+    user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
     password = request.form.get("password", "")
     if not password:
         flash("Password is required.", "error")
@@ -177,7 +206,7 @@ def user_reset_password(user_id):
             "UPDATE users SET password_hash = %s, updated_at = NOW() WHERE id = %s",
             (password_hash, user_id),
         )
-        flash("Password updated.", "success")
+        flash(f"Password for '{user['username']}' updated.", "success")
     return redirect(url_for("users"))
 
 
@@ -249,6 +278,148 @@ def attachment_delete(attachment_id):
     db.execute("DELETE FROM attachments WHERE id = %s", (attachment_id,))
     flash("Attachment deleted from database. Note: run rustfs cleanup for the object.", "success")
     return redirect(url_for("attachments"))
+
+
+# ---------- permission groups ----------
+
+def _all_permission_keys():
+    rows = db.fetch_all("SELECT key FROM permissions ORDER BY key ASC")
+    return [r["key"] for r in rows]
+
+
+@app.route("/groups")
+@login_required
+def groups():
+    group_rows = db.fetch_all(
+        "SELECT g.id, g.name, g.description, g.is_default, g.created_at, "
+        "COALESCE(COUNT(ug.user_id), 0) AS member_count "
+        "FROM groups g LEFT JOIN user_groups ug ON ug.group_id = g.id "
+        "GROUP BY g.id ORDER BY g.is_default DESC, g.id ASC"
+    )
+    perms = db.fetch_all(
+        "SELECT key, name FROM permissions ORDER BY key ASC"
+    )
+    memberships = db.fetch_all(
+        "SELECT group_id, user_id FROM user_groups ORDER BY group_id"
+    )
+    members_by_group = {}
+    for m in memberships:
+        members_by_group.setdefault(m["group_id"], []).append(m["user_id"])
+
+    perm_keys_by_group = {}
+    for g in group_rows:
+        rows = db.fetch_all(
+            "SELECT permission_key FROM group_permissions WHERE group_id = %s", (g["id"],)
+        )
+        perm_keys_by_group[g["id"]] = {r["permission_key"] for r in rows}
+
+    all_users = db.fetch_all("SELECT id, username, nickname FROM users ORDER BY username ASC")
+    user_lookup = {u["id"]: (u["nickname"] or u["username"]) for u in all_users}
+
+    return render_template(
+        "groups.html",
+        groups=group_rows,
+        perms=perms,
+        all_keys=[p["key"] for p in perms],
+        perm_keys_by_group=perm_keys_by_group,
+        members_by_group=members_by_group,
+        all_users=all_users,
+        user_lookup=user_lookup,
+    )
+
+
+@app.route("/groups", methods=["POST"])
+@login_required
+def group_create():
+    name = request.form.get("name", "").strip()
+    description = request.form.get("description", "").strip()
+    if not name:
+        flash("Group name is required.", "error")
+        return redirect(url_for("groups"))
+    if db.fetch_one("SELECT id FROM groups WHERE name = %s", (name,)):
+        flash("Group name already exists.", "error")
+        return redirect(url_for("groups"))
+    try:
+        db.execute(
+            "INSERT INTO groups (name, description) VALUES (%s, %s)",
+            (name, description),
+        )
+        flash(f"Group '{name}' created.", "success")
+    except Exception as e:
+        app.logger.error("failed to create group: %s", e)
+        flash("Failed to create group.", "error")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/<int:group_id>/permissions", methods=["POST"])
+@login_required
+def group_permissions(group_id):
+    group = db.fetch_one("SELECT id, name FROM groups WHERE id = %s", (group_id,))
+    if not group:
+        abort(404)
+    keys = request.form.getlist("permission_keys")
+    # only keep keys that actually exist
+    valid = {r["key"] for r in db.fetch_all("SELECT key FROM permissions")}
+    keys = [k for k in keys if k in valid]
+    db.execute("DELETE FROM group_permissions WHERE group_id = %s", (group_id,))
+    for k in keys:
+        db.execute(
+            "INSERT INTO group_permissions (group_id, permission_key) VALUES (%s, %s)",
+            (group_id, k),
+        )
+    flash(f"Permissions for '{group['name']}' updated.", "success")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/<int:group_id>/members/add", methods=["POST"])
+@login_required
+def group_member_add(group_id):
+    group = db.fetch_one("SELECT id, name FROM groups WHERE id = %s", (group_id,))
+    if not group:
+        abort(404)
+    user_id = request.form.get("user_id", type=int)
+    user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
+    if not user:
+        flash("User not found.", "error")
+        return redirect(url_for("groups"))
+    db.execute(
+        "INSERT INTO user_groups (user_id, group_id) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+        (user_id, group_id),
+    )
+    flash(f"User '{user['username']}' added to '{group['name']}'.", "success")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/<int:group_id>/members/remove", methods=["POST"])
+@login_required
+def group_member_remove(group_id):
+    group = db.fetch_one("SELECT id, name, is_default FROM groups WHERE id = %s", (group_id,))
+    if not group:
+        abort(404)
+    user_id = request.form.get("user_id", type=int)
+    if group["is_default"]:
+        flash("Users in the default group cannot be removed.", "error")
+        return redirect(url_for("groups"))
+    db.execute(
+        "DELETE FROM user_groups WHERE user_id = %s AND group_id = %s",
+        (user_id, group_id),
+    )
+    flash("User removed from group.", "success")
+    return redirect(url_for("groups"))
+
+
+@app.route("/groups/<int:group_id>/delete", methods=["POST"])
+@login_required
+def group_delete(group_id):
+    group = db.fetch_one("SELECT id, name, is_default FROM groups WHERE id = %s", (group_id,))
+    if not group:
+        abort(404)
+    if group["is_default"]:
+        flash("The default group cannot be deleted.", "error")
+        return redirect(url_for("groups"))
+    db.execute("DELETE FROM groups WHERE id = %s", (group_id,))
+    flash(f"Group '{group['name']}' deleted.", "success")
+    return redirect(url_for("groups"))
 
 
 if __name__ == "__main__":

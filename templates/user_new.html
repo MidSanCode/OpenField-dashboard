@@ -1,36 +1,38 @@
 {% extends "base.html" %}
 {% block title %}新建用户{% endblock %}
 {% block content %}
-<h2>新建用户</h2>
-<div class="card" style="max-width: 460px;">
-  <form method="post">
-    <div>
-      <label>用户名 (登录用, 唯一)</label><br>
-      <input type="text" name="username" required style="width: 100%;">
-    </div>
-    <div style="margin-top: 12px;">
-      <label>昵称 (显示用)</label><br>
-      <input type="text" name="nickname" required style="width: 100%;">
-    </div>
-    <div style="margin-top: 12px;">
-      <label>邮箱 (可选)</label><br>
-      <input type="email" name="email" style="width: 100%;">
-    </div>
-    <div style="margin-top: 12px;">
-      <label>密码 (账密登录)</label><br>
-      <input type="password" name="password" required style="width: 100%;">
-    </div>
-    <div style="margin-top: 12px;">
-      <label>角色</label><br>
-      <select name="role">
-        <option value="user">user (普通用户)</option>
-        <option value="admin">admin (管理员)</option>
-      </select>
-    </div>
-    <div style="margin-top: 16px;">
-      <button type="submit">创建</button>
-      <a class="btn" href="{{ url_for('users') }}">返回</a>
-    </div>
-  </form>
+<div style="max-width: 520px;">
+  <h2 class="page-title"><i class="bi bi-person-plus me-2 text-primary"></i>新建用户</h2>
+  <div class="card p-4">
+    <form method="post">
+      <div class="mb-3">
+        <label class="form-label" for="username">用户名 <span class="text-danger">*</span></label>
+        <input type="text" class="form-control" id="username" name="username" required placeholder="登录用, 唯一">
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="nickname">昵称 <span class="text-danger">*</span></label>
+        <input type="text" class="form-control" id="nickname" name="nickname" required placeholder="显示用">
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="email">邮箱 <span class="text-muted">(可选)</span></label>
+        <input type="email" class="form-control" id="email" name="email" placeholder="user@example.com">
+      </div>
+      <div class="mb-3">
+        <label class="form-label" for="password">密码 <span class="text-danger">*</span></label>
+        <input type="password" class="form-control" id="password" name="password" required placeholder="账密登录">
+      </div>
+      <div class="mb-4">
+        <label class="form-label" for="role">角色</label>
+        <select class="form-select" id="role" name="role">
+          <option value="user">user (普通用户)</option>
+          <option value="admin">admin (管理员)</option>
+        </select>
+      </div>
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>创建</button>
+        <a class="btn btn-outline-secondary" href="{{ url_for('users') }}"><i class="bi bi-arrow-left me-1"></i>返回</a>
+      </div>
+    </form>
+  </div>
 </div>
 {% endblock %}
