@@ -224,6 +224,21 @@ def user_delete(user_id):
     return redirect(url_for("users"))
 
 
+@app.route("/users/<int:user_id>/unbind-oauth", methods=["POST"])
+@login_required
+def user_unbind_oauth(user_id):
+    user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
+    db.execute(
+        "UPDATE users SET oauth2_provider = '', oauth2_id = '', updated_at = NOW() "
+        "WHERE id = %s",
+        (user_id,),
+    )
+    flash("OAuth binding removed.", "success")
+    return redirect(url_for("users"))
+
+
 # ---------- posts ----------
 
 @app.route("/posts")

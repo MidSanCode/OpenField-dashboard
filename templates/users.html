@@ -22,7 +22,7 @@
       <thead>
         <tr>
           <th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>头像</th>
-          <th>角色</th><th>状态</th><th>存储空间</th><th>创建时间</th><th class="text-end">操作</th>
+          <th>角色</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>创建时间</th><th class="text-end">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -53,6 +53,13 @@
             {% endif %}
           </td>
           <td>
+            {% if u.oauth2_provider %}
+              <span class="badge text-bg-info"><i class="bi bi-link-45deg me-1"></i>{{ u.oauth2_provider }}</span>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td>
             <div class="text-nowrap small text-muted">
               {{ (u.storage_used / 1048576) | round(1) }} MB / {{ (u.storage_quota / 1048576) | round(1) }} MB
             </div>
@@ -72,6 +79,14 @@
                       data-bs-target="#resetPw{{ u.id }}" title="重置密码">
                 <i class="bi bi-key"></i>
               </button>
+              {% if u.oauth2_provider %}
+              <form method="post" action="{{ url_for('user_unbind_oauth', user_id=u.id) }}" class="d-inline"
+                    onsubmit="return confirm('确认解绑 {{ u.username }} 的 {{ u.oauth2_provider }} 账号?')">
+                <button class="btn btn-sm btn-outline-warning" type="submit" title="解绑 OAuth">
+                  <i class="bi bi-link-45deg"></i>
+                </button>
+              </form>
+              {% endif %}
               <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}" class="d-inline"
                     onsubmit="return confirm('确认删除用户 {{ u.username }}? 其帖子与消息将一并删除。')">
                 <button class="btn btn-sm btn-outline-danger" type="submit" title="删除">
@@ -106,7 +121,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="10" class="text-center text-muted py-4">没有找到用户</td></tr>
+        <tr><td colspan="11" class="text-center text-muted py-4">没有找到用户</td></tr>
         {% endfor %}
       </tbody>
     </table>
