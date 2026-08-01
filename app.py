@@ -103,7 +103,7 @@ def users():
     base_select = (
         "SELECT u.id, u.username, u.nickname, u.email, u.avatar_url, u.role, "
         "u.needs_registration, u.oauth2_provider, u.storage_quota, u.is_verified, "
-        "u.created_at, "
+        "u.verified_note, u.verified_by, u.created_at, "
         "COALESCE((SELECT SUM(a.size_bytes) FROM attachments a WHERE a.user_id = u.id), 0) AS storage_used "
         "FROM users u "
     )
