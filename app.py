@@ -102,7 +102,7 @@ def users():
     query = request.args.get("q", "").strip()
     base_select = (
         "SELECT u.id, u.username, u.nickname, u.email, u.avatar_url, u.role, "
-        "u.needs_registration, u.oauth2_provider, u.storage_quota, "
+        "u.needs_registration, u.oauth2_provider, u.storage_quota, u.is_verified, "
         "u.created_at, "
         "COALESCE((SELECT SUM(a.size_bytes) FROM attachments a WHERE a.user_id = u.id), 0) AS storage_used "
         "FROM users u "
@@ -186,6 +186,21 @@ def user_role(user_id):
         abort(404)
     db.execute("UPDATE users SET role = %s, updated_at = NOW() WHERE id = %s", (role, user_id))
     flash("Role updated.", "success")
+    return redirect(url_for("users"))
+
+
+@app.route("/users/<int:user_id>/verified", methods=["POST"])
+@login_required
+def user_verified(user_id):
+    user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
+    verified = request.form.get("verified") == "1"
+    db.execute(
+        "UPDATE users SET is_verified = %s, updated_at = NOW() WHERE id = %s",
+        (verified, user_id),
+    )
+    flash("Verified status updated.", "success")
     return redirect(url_for("users"))
 
 

@@ -22,7 +22,7 @@
       <thead>
         <tr>
           <th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>头像</th>
-          <th>角色</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>创建时间</th><th class="text-end">操作</th>
+          <th>角色</th><th>认证</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>创建时间</th><th class="text-end">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -43,6 +43,15 @@
                 <option value="user" {{ 'selected' if u.role == 'user' }}>普通用户</option>
                 <option value="admin" {{ 'selected' if u.role == 'admin' }}>管理员</option>
               </select>
+            </form>
+          </td>
+          <td>
+            <form method="post" action="{{ url_for('user_verified', user_id=u.id) }}" title="认证标记 (全局显示在昵称后)">
+              <div class="form-check form-switch m-0">
+                <input type="hidden" name="verified" value="0">
+                <input type="checkbox" class="form-check-input" name="verified" value="1"
+                       {{ 'checked' if u.is_verified }} onchange="this.form.submit()">
+              </div>
             </form>
           </td>
           <td>
@@ -121,7 +130,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="11" class="text-center text-muted py-4">没有找到用户</td></tr>
+        <tr><td colspan="12" class="text-center text-muted py-4">没有找到用户</td></tr>
         {% endfor %}
       </tbody>
     </table>
