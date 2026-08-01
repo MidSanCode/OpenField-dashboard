@@ -58,3 +58,10 @@ def init_admin_table():
         ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS can_verify BOOLEAN NOT NULL DEFAULT TRUE
         """
     )
+    # Ensure user verification columns exist (self-healing on admin startup).
+    execute(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_note TEXT NOT NULL DEFAULT ''"
+    )
+    execute(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by VARCHAR(255) NOT NULL DEFAULT ''"
+    )
