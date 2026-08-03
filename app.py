@@ -104,7 +104,8 @@ def users():
         "SELECT u.id, u.username, u.nickname, u.email, u.avatar_url, u.role, "
         "u.needs_registration, u.oauth2_provider, u.storage_quota, u.is_verified, "
         "u.verified_note, u.verified_by, u.created_at, "
-        "COALESCE((SELECT SUM(a.size_bytes) FROM attachments a WHERE a.user_id = u.id), 0) AS storage_used "
+        "COALESCE((SELECT SUM(a.size_bytes) FROM attachments a WHERE a.user_id = u.id), 0) AS storage_used, "
+        "COALESCE((SELECT w.balance FROM wallets w WHERE w.user_id = u.id), 0) AS wallet_balance "
         "FROM users u "
     )
     if query:
@@ -173,6 +174,64 @@ def user_new():
                 app.logger.error("failed to create user: %s", e)
                 flash("Failed to create user.", "error")
     return render_template("user_new.html")
+
+
+@app.route("/users/<int:user_id>/wallet", methods=["POST"])
+@login_required
+def user_wallet(user_id):
+    user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
+    try:
+        amount = float(request.form.get("amount", ""))
+    except ValueError:
+        flash("Invalid amount value.", "error")
+        return redirect(url_for("users"))
+    if amount == 0:
+        flash("Amount must not be zero.", "error")
+        return redirect(url_for("users"))
+    amount_cents = int(amount * 100)
+    description = request.form.get("description", "").strip() or (
+        "管理员充值" if amount_cents > 0 else "管理员扣款"
+    )
+    tx_type = "recharge" if amount_cents > 0 else "deduct"
+    try:
+        # mirror the server-side wallet adjustment in a transaction
+        conn = db.connect()
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO wallets (user_id, balance) VALUES (%s, 0) "
+                    "ON CONFLICT (user_id) DO NOTHING",
+                    (user_id,),
+                )
+                cur.execute(
+                    "SELECT balance FROM wallets WHERE user_id = %s FOR UPDATE",
+                    (user_id,),
+                )
+                balance = cur.fetchone()[0]
+                new_balance = balance + amount_cents
+                if new_balance < 0:
+                    flash("Insufficient balance for deduction.", "error")
+                    return redirect(url_for("users"))
+                cur.execute(
+                    "UPDATE wallets SET balance = %s, updated_at = NOW() WHERE user_id = %s",
+                    (new_balance, user_id),
+                )
+                cur.execute(
+                    "INSERT INTO wallet_transactions "
+                    "(user_id, amount, balance_after, type, description, operator_id) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)",
+                    (user_id, amount_cents, new_balance, tx_type, description, session.get("admin_id")),
+                )
+                conn.commit()
+        finally:
+            conn.close()
+        flash(f"Wallet updated for '{user['username']}' (+{amount_cents / 100:g}).", "success")
+    except Exception as e:
+        app.logger.error("failed to adjust wallet: %s", e)
+        flash("Failed to adjust wallet.", "error")
+    return redirect(url_for("users"))
 
 
 @app.route("/users/<int:user_id>/role", methods=["POST"])

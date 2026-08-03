@@ -22,7 +22,7 @@
       <thead>
         <tr>
           <th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>头像</th>
-          <th>角色</th><th>认证</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>创建时间</th><th class="text-end">操作</th>
+          <th>角色</th><th>认证</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>钱包</th><th>创建时间</th><th class="text-end">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -116,6 +116,41 @@
               </div>
             </form>
           </td>
+          <td>
+            <div class="text-nowrap fw-medium">{{ (u.wallet_balance / 100) | round(2) }}</div>
+            <button class="btn btn-sm btn-outline-success mt-1" data-bs-toggle="modal" data-bs-target="#walletModal{{ u.id }}" title="调整余额">
+              <i class="bi bi-wallet2"></i>
+            </button>
+            <div class="modal fade" id="walletModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content text-start">
+                  <form method="post" action="{{ url_for('user_wallet', user_id=u.id) }}">
+                    <div class="modal-header">
+                      <h5 class="modal-title"><i class="bi bi-wallet2 me-2"></i>调整钱包：{{ u.username }}</h5>
+                      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                      <p class="text-muted small mb-3">
+                        当前余额：<strong>{{ (u.wallet_balance / 100) | round(2) }}</strong>（正值充值，负值扣款）
+                      </p>
+                      <div class="mb-3">
+                        <label class="form-label">金额</label>
+                        <input type="number" step="0.01" class="form-control" name="amount" required placeholder="例如：100 或 -50">
+                      </div>
+                      <div class="mb-3">
+                        <label class="form-label">备注（可选）</label>
+                        <input type="text" class="form-control" name="description" placeholder="说明本次变动原因">
+                      </div>
+                    </div>
+                    <div class="modal-footer">
+                      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                      <button type="submit" class="btn btn-success"><i class="bi bi-check-lg me-1"></i>确认</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </td>
           <td class="text-muted">{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
           <td class="text-end">
             <div class="d-inline-flex gap-1">
@@ -165,7 +200,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="12" class="text-center text-muted py-4">没有找到用户</td></tr>
+        <tr><td colspan="13" class="text-center text-muted py-4">没有找到用户</td></tr>
         {% endfor %}
       </tbody>
     </table>
