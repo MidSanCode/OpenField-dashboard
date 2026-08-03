@@ -85,6 +85,11 @@
           <i class="bi bi-person-check me-2"></i>认证者管理
         </a>
       </li>
+      <li class="nav-item">
+        <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('server') }}" href="{{ url_for('server_page') }}">
+          <i class="bi bi-server me-2"></i>服务管理
+        </a>
+      </li>
     </ul>
     <hr class="text-secondary my-3">
     <a class="nav-link logout-link" href="{{ url_for('logout') }}">

@@ -15,6 +15,7 @@ from flask import (
 
 import config
 import db
+import server_manager
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = config.SECRET_KEY
@@ -92,6 +93,94 @@ def dashboard():
         recent_users=recent_users,
         recent_posts=recent_posts,
     )
+
+
+# ---------- server management ----------
+
+@app.route("/server")
+@login_required
+def server_page():
+    cfg = server_manager.load_config()
+    services = server_manager.refresh_status(cfg, server_manager.discover(cfg.get("server_root", "")))
+    return render_template(
+        "server.html",
+        config=cfg,
+        services=services,
+        server_root=cfg.get("server_root", ""),
+    )
+
+
+@app.route("/server/config", methods=["POST"])
+@login_required
+def server_config():
+    cfg = server_manager.load_config()
+    new_root = request.form.get("server_root", "").strip()
+    if new_root:
+        cfg["server_root"] = new_root.rstrip("\\/")
+        server_manager.save_config(cfg)
+        flash(f"服务器根目录已设置为: {cfg['server_root']}", "success")
+    else:
+        flash("服务器根目录不能为空。", "error")
+    return redirect(url_for("server_page"))
+
+
+@app.route("/server/<service_name>/build", methods=["POST"])
+@login_required
+def server_build(service_name):
+    cfg = server_manager.load_config()
+    ok, msg = server_manager.build_service(cfg, service_name)
+    flash(msg, "success" if ok else "error")
+    return redirect(url_for("server_page"))
+
+
+@app.route("/server/<service_name>/start", methods=["POST"])
+@login_required
+def server_start(service_name):
+    cfg = server_manager.load_config()
+    ok, msg = server_manager.start_service(cfg, service_name)
+    flash(msg, "success" if ok else "error")
+    return redirect(url_for("server_page"))
+
+
+@app.route("/server/<service_name>/stop", methods=["POST"])
+@login_required
+def server_stop(service_name):
+    cfg = server_manager.load_config()
+    ok, msg = server_manager.stop_service(cfg, service_name)
+    flash(msg, "success" if ok else "error")
+    return redirect(url_for("server_page"))
+
+
+@app.route("/server/start-all", methods=["POST"])
+@login_required
+def server_start_all():
+    cfg = server_manager.load_config()
+    errors = []
+    started = 0
+    for name in server_manager.SERVICES:
+        ok, msg = server_manager.start_service(cfg, name)
+        if ok:
+            started += 1
+        elif "已在运行" not in msg:
+            errors.append(msg)
+    if started:
+        flash(f"已启动 {started} 个服务。", "success")
+    for e in errors:
+        flash(e, "error")
+    return redirect(url_for("server_page"))
+
+
+@app.route("/server/stop-all", methods=["POST"])
+@login_required
+def server_stop_all():
+    cfg = server_manager.load_config()
+    stopped = 0
+    for name in list(cfg.get("pids", {}).keys()):
+        ok, _ = server_manager.stop_service(cfg, name)
+        if ok:
+            stopped += 1
+    flash(f"已停止 {stopped} 个服务。", "success")
+    return redirect(url_for("server_page"))
 
 
 # ---------- users ----------
