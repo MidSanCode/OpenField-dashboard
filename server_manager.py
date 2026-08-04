@@ -153,6 +153,34 @@ def stop_service(cfg, name):
     return True, f"{name} 已停止"
 
 
+def run_migrations(cfg):
+    """Initialize the database schema by running the Go server's migrations.
+
+    Invokes the account service in migrate-only mode using the configured
+    server root. Returns (ok, message).
+    """
+    root = cfg.get("server_root", "")
+    if not root:
+        return False, "未设置服务器根目录"
+    exe_path = service_exe_path(root, "account")
+    if not os.path.isfile(exe_path):
+        return False, f"未找到 account 服务可执行文件: {exe_path}，请先在服务管理页构建"
+    try:
+        result = subprocess.run(
+            [exe_path, "-migrate"],
+            cwd=root,
+            capture_output=True,
+            timeout=600,
+        )
+    except FileNotFoundError:
+        return False, "未找到可执行文件"
+    except subprocess.TimeoutExpired:
+        return False, "数据库初始化超时（10 分钟）"
+    if result.returncode != 0:
+        return False, f"数据库初始化失败:\n{result.stderr.decode('utf-8', 'replace')}"
+    return True, "数据库初始化完成"
+
+
 def build_service(cfg, name):
     root = cfg.get("server_root", "")
     if not root:

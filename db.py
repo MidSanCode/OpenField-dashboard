@@ -58,10 +58,20 @@ def init_admin_table():
         ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS can_verify BOOLEAN NOT NULL DEFAULT TRUE
         """
     )
-    # Ensure user verification columns exist (self-healing on admin startup).
+    # User-verification columns only make sense once the OpenField schema (and
+    # the users table) exists; on a brand-new database this runs after the Go
+    # server migrations have initialized the schema.
+    if not is_initialized():
+        return
     execute(
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_note TEXT NOT NULL DEFAULT ''"
     )
     execute(
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by VARCHAR(255) NOT NULL DEFAULT ''"
     )
+
+
+def is_initialized():
+    """True when the OpenField schema exists (the users table is present)."""
+    row = fetch_one("SELECT to_regclass('public.users') AS t")
+    return bool(row and row["t"])

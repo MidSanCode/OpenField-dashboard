@@ -25,6 +25,30 @@ app.config["SESSION_COOKIE_HTTPONLY"] = config.SESSION_COOKIE_HTTPONLY
 db.init_admin_table()
 
 
+# ---------- initialization ----------
+
+def initialize_database():
+    """Ensure the OpenField schema exists.
+
+    On a brand-new database (no OpenField tables yet) this automatically runs
+    the Go server's migrations via the account service in migrate-only mode.
+    """
+    if db.is_initialized():
+        return True, "数据库已初始化"
+    cfg = server_manager.load_config()
+    ok, msg = server_manager.run_migrations(cfg)
+    if ok:
+        # Now that the schema exists, create the admin tables that depend on it.
+        db.init_admin_table()
+        app.logger.info("database auto-initialized: %s", msg)
+    else:
+        app.logger.error("database auto-initialization failed: %s", msg)
+    return ok, msg
+
+
+initialize_database()
+
+
 # ---------- auth ----------
 
 def login_required(view):
@@ -107,7 +131,16 @@ def server_page():
         config=cfg,
         services=services,
         server_root=cfg.get("server_root", ""),
+        db_initialized=db.is_initialized(),
     )
+
+
+@app.route("/server/init-db", methods=["POST"])
+@login_required
+def server_init_db():
+    ok, msg = initialize_database()
+    flash(msg, "success" if ok else "error")
+    return redirect(url_for("server_page"))
 
 
 @app.route("/server/config", methods=["POST"])
