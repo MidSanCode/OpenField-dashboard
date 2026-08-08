@@ -118,9 +118,14 @@
           </td>
           <td>
             <div class="text-nowrap fw-medium">{{ (u.wallet_balance / 100) | round(2) }}</div>
-            <button class="btn btn-sm btn-outline-success mt-1" data-bs-toggle="modal" data-bs-target="#walletModal{{ u.id }}" title="调整余额">
-              <i class="bi bi-wallet2"></i>
-            </button>
+            <div class="d-inline-flex gap-1 mt-1">
+              <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#walletModal{{ u.id }}" title="调整余额">
+                <i class="bi bi-wallet2"></i>
+              </button>
+              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('user_wallet_history', user_id=u.id) }}" title="查看余额记录">
+                <i class="bi bi-receipt"></i>
+              </a>
+            </div>
             <div class="modal fade" id="walletModal{{ u.id }}" tabindex="-1" aria-hidden="true">
               <div class="modal-dialog modal-dialog-centered">
                 <div class="modal-content text-start">

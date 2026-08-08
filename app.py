@@ -415,6 +415,7 @@ def user_wallet(user_id):
         "管理员充值" if amount_cents > 0 else "管理员扣款"
     )
     tx_type = "recharge" if amount_cents > 0 else "deduct"
+    admin_name = session.get("admin_username", "")
     try:
         # mirror the server-side wallet adjustment in a transaction
         conn = db.connect()
@@ -438,20 +439,65 @@ def user_wallet(user_id):
                     "UPDATE wallets SET balance = %s, updated_at = NOW() WHERE user_id = %s",
                     (new_balance, user_id),
                 )
+                # Link the operator to a users row when the admin account shares
+                # a username; otherwise leave operator_id NULL (the FK points to
+                # users(id)) and record the admin account name for the audit log.
+                cur.execute(
+                    "SELECT id FROM users WHERE username = %s LIMIT 1",
+                    (admin_name,),
+                )
+                op_row = cur.fetchone()
+                operator_id = op_row[0] if op_row else None
                 cur.execute(
                     "INSERT INTO wallet_transactions "
-                    "(user_id, amount, balance_after, type, description, operator_id) "
-                    "VALUES (%s, %s, %s, %s, %s, %s)",
-                    (user_id, amount_cents, new_balance, tx_type, description, session.get("admin_id")),
+                    "(user_id, amount, balance_after, type, description, operator_id, operator_username) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (user_id, amount_cents, new_balance, tx_type, description, operator_id, admin_name),
                 )
                 conn.commit()
         finally:
             conn.close()
-        flash(f"Wallet updated for '{user['username']}' (+{amount_cents / 100:g}).", "success")
+        flash(f"Wallet updated for '{user['username']}' ({amount_cents / 100:+.2f}).", "success")
     except Exception as e:
         app.logger.error("failed to adjust wallet: %s", e)
         flash("Failed to adjust wallet.", "error")
     return redirect(url_for("users"))
+
+
+@app.route("/users/<int:user_id>/wallet/history")
+@login_required
+def user_wallet_history(user_id):
+    user = db.fetch_one(
+        "SELECT u.id, u.username, u.nickname, "
+        "COALESCE((SELECT w.balance FROM wallets w WHERE w.user_id = u.id), 0) AS balance "
+        "FROM users u WHERE u.id = %s",
+        (user_id,),
+    )
+    if not user:
+        abort(404)
+    per_page = 20
+    total = db.fetch_one(
+        "SELECT COUNT(*) AS c FROM wallet_transactions WHERE user_id = %s",
+        (user_id,),
+    )["c"]
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(max(1, request.args.get("page", 1, type=int)), total_pages)
+    offset = (page - 1) * per_page
+    txns = db.fetch_all(
+        "SELECT id, amount, balance_after, type, description, operator_id, "
+        "operator_username, created_at "
+        "FROM wallet_transactions WHERE user_id = %s "
+        "ORDER BY id DESC LIMIT %s OFFSET %s",
+        (user_id, per_page, offset),
+    )
+    return render_template(
+        "wallet_history.html",
+        user=user,
+        txns=txns,
+        page=page,
+        total_pages=total_pages,
+        total=total,
+    )
 
 
 @app.route("/users/<int:user_id>/role", methods=["POST"])

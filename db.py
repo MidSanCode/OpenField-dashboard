@@ -92,6 +92,14 @@ def init_admin_table():
     execute(
         "ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by VARCHAR(255) NOT NULL DEFAULT ''"
     )
+    # Audit trail for admin wallet adjustments: keep the acting admin account
+    # name even when the operator has no matching users row (operator_id stays
+    # NULL in that case so the FK to users(id) is never violated).
+    if fetch_one("SELECT to_regclass('public.wallet_transactions') AS t")["t"]:
+        execute(
+            "ALTER TABLE wallet_transactions ADD COLUMN IF NOT EXISTS "
+            "operator_username VARCHAR(255) NOT NULL DEFAULT ''"
+        )
 
 
 def is_initialized():
