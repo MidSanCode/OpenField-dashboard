@@ -81,6 +81,11 @@
         </a>
       </li>
       <li class="nav-item">
+        <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('db') }}" href="{{ url_for('db_page') }}">
+          <i class="bi bi-database me-2"></i>数据库管理
+        </a>
+      </li>
+      <li class="nav-item">
         <a class="nav-link {{ 'active' if request.endpoint == 'admins' }}" href="{{ url_for('admins') }}">
           <i class="bi bi-person-check me-2"></i>认证者管理
         </a>

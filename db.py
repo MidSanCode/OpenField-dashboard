@@ -1,3 +1,5 @@
+import contextlib
+
 import psycopg2
 import psycopg2.extras
 
@@ -12,6 +14,27 @@ def get_conn():
     conn = connect()
     conn.autocommit = True
     return conn
+
+
+@contextlib.contextmanager
+def advisory_lock(lock_id):
+    """Hold a PostgreSQL session-level advisory lock for the duration of a block.
+
+    Used to serialize destructive operations (e.g. database initialization)
+    across concurrent processes/threads.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT pg_advisory_lock(%s)", (lock_id,))
+    try:
+        yield
+    finally:
+        try:
+            cur.execute("SELECT pg_advisory_unlock(%s)", (lock_id,))
+        except Exception:
+            pass
+        cur.close()
+        conn.close()
 
 
 def fetch_all(query, args=None):

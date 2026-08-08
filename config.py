@@ -17,6 +17,9 @@ SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "test")
 SESSION_COOKIE_NAME = "openfield_admin"
 SESSION_COOKIE_HTTPONLY = True
 
+# Advisory lock id used to serialize database initialization.
+DB_INIT_LOCK_ID = int(os.getenv("ADMIN_DB_INIT_LOCK_ID", "1207"))
+
 
 def dsn():
     return (

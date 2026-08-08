@@ -1,5 +1,8 @@
 import functools
 import io
+import os
+import tempfile
+import uuid
 
 import bcrypt
 from flask import (
@@ -9,12 +12,14 @@ from flask import (
     redirect,
     render_template,
     request,
+    send_file,
     session,
     url_for,
 )
 
 import config
 import db
+import db_admin
 import server_manager
 
 app = Flask(__name__)
@@ -32,18 +37,25 @@ def initialize_database():
 
     On a brand-new database (no OpenField tables yet) this automatically runs
     the Go server's migrations via the account service in migrate-only mode.
+
+    The whole check-and-migrate sequence is guarded by a PostgreSQL advisory
+    lock so concurrent processes cannot initialize the schema twice.
     """
     if db.is_initialized():
         return True, "数据库已初始化"
     cfg = server_manager.load_config()
-    ok, msg = server_manager.run_migrations(cfg)
-    if ok:
-        # Now that the schema exists, create the admin tables that depend on it.
-        db.init_admin_table()
-        app.logger.info("database auto-initialized: %s", msg)
-    else:
-        app.logger.error("database auto-initialization failed: %s", msg)
-    return ok, msg
+    with db.advisory_lock(config.DB_INIT_LOCK_ID):
+        # Re-check inside the lock: another process may have finished first.
+        if db.is_initialized():
+            return True, "数据库已初始化"
+        ok, msg = server_manager.run_migrations(cfg)
+        if ok:
+            # Now that the schema exists, create the admin tables that depend on it.
+            db.init_admin_table()
+            app.logger.info("database auto-initialized: %s", msg)
+        else:
+            app.logger.error("database auto-initialization failed: %s", msg)
+        return ok, msg
 
 
 initialize_database()
@@ -138,9 +150,95 @@ def server_page():
 @app.route("/server/init-db", methods=["POST"])
 @login_required
 def server_init_db():
+    if db.is_initialized():
+        flash("数据库已初始化，禁止重复初始化。如需恢复数据请使用「导入备份」。", "error")
+        return redirect(url_for("server_page"))
     ok, msg = initialize_database()
     flash(msg, "success" if ok else "error")
     return redirect(url_for("server_page"))
+
+
+# ---------- database management ----------
+
+@app.route("/db")
+@login_required
+def db_page():
+    return render_template(
+        "db.html",
+        db_initialized=db.is_initialized(),
+        backups=db_admin.list_backups(),
+    )
+
+
+@app.route("/db/init", methods=["POST"])
+@login_required
+def db_init():
+    if db.is_initialized():
+        flash("数据库已初始化，禁止重复初始化。如需恢复数据请使用「导入备份」。", "error")
+        return redirect(url_for("db_page"))
+    ok, msg = initialize_database()
+    flash(msg, "success" if ok else "error")
+    return redirect(url_for("db_page"))
+
+
+@app.route("/db/export", methods=["POST"])
+@login_required
+def db_export():
+    path, msg = db_admin.export_backup()
+    flash(msg, "success" if path else "error")
+    return redirect(url_for("db_page"))
+
+
+@app.route("/db/import", methods=["POST"])
+@login_required
+def db_import():
+    if request.form.get("confirm") != "1":
+        flash("请勾选「我理解导入会覆盖当前数据」后再执行导入。", "error")
+        return redirect(url_for("db_page"))
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("请选择要导入的备份文件（.sql）。", "error")
+        return redirect(url_for("db_page"))
+    if not file.filename.lower().endswith(".sql"):
+        flash("仅支持从本面板导出的 .sql 备份文件。", "error")
+        return redirect(url_for("db_page"))
+    tmp_path = os.path.join(
+        tempfile.gettempdir(), f"openfield-import-{uuid.uuid4().hex}.sql"
+    )
+    try:
+        file.save(tmp_path)
+        ok, msg = db_admin.import_backup(tmp_path)
+        flash(msg, "success" if ok else "error")
+    except Exception as e:
+        app.logger.error("failed to import backup: %s", e)
+        flash(f"导入失败: {e}", "error")
+    finally:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+    return redirect(url_for("db_page"))
+
+
+@app.route("/db/backups/<path:filename>/download")
+@login_required
+def db_backup_download(filename):
+    try:
+        path = db_admin.backup_path(filename)
+    except FileNotFoundError:
+        abort(404)
+    return send_file(path, as_attachment=True, download_name=os.path.basename(path))
+
+
+@app.route("/db/backups/<path:filename>/delete", methods=["POST"])
+@login_required
+def db_backup_delete(filename):
+    try:
+        db_admin.delete_backup(filename)
+        flash(f"备份已删除: {os.path.basename(filename)}", "success")
+    except FileNotFoundError:
+        abort(404)
+    return redirect(url_for("db_page"))
 
 
 @app.route("/server/config", methods=["POST"])
