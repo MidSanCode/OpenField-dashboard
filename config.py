@@ -14,6 +14,15 @@ RUSTFS_BUCKET = os.getenv("RUSTFS_BUCKET", "openfield")
 
 SECRET_KEY = os.getenv("ADMIN_SECRET_KEY", "test")
 
+# OpenField Go server repository root used by the server manager.
+# Override with ADMIN_SERVER_ROOT; defaults to the sibling "server" folder
+# next to this admin repository.
+SERVER_ROOT = os.getenv("ADMIN_SERVER_ROOT", "").strip()
+if not SERVER_ROOT:
+    SERVER_ROOT = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "server"
+    )
+
 SESSION_COOKIE_NAME = "openfield_admin"
 SESSION_COOKIE_HTTPONLY = True
 

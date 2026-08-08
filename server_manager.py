@@ -10,8 +10,9 @@ import json
 import os
 import subprocess
 
+import config
+
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_config.json")
-DEFAULT_SERVER_ROOT = r"F:\exeliang\OpenField\server"
 
 # Service name -> built executable + source directory.
 SERVICES = {
@@ -32,12 +33,12 @@ def load_config():
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
-            cfg.setdefault("server_root", DEFAULT_SERVER_ROOT)
+            cfg.setdefault("server_root", config.SERVER_ROOT)
             cfg.setdefault("pids", {})
             return cfg
         except (json.JSONDecodeError, OSError):
             pass
-    return {"server_root": DEFAULT_SERVER_ROOT, "pids": {}}
+    return {"server_root": config.SERVER_ROOT, "pids": {}}
 
 
 def save_config(cfg):
