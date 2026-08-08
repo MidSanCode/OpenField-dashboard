@@ -8,20 +8,27 @@ can be checked by polling the PID.
 import ctypes
 import json
 import os
+import signal
 import subprocess
 
 import config
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_config.json")
 
-# Service name -> built executable + source directory.
+# Windows executables carry a .exe suffix; Linux ELF binaries do not. The
+# suffix follows the platform the panel runs on.
+def _exe_suffix():
+    return ".exe" if os.name == "nt" else ""
+
+# Service name -> built executable base name (suffix added at runtime) +
+# source directory.
 SERVICES = {
-    "gateway": {"exe": "openfield-gateway.exe", "dir": "gateway"},
-    "account": {"exe": "openfield-account.exe", "dir": "account"},
-    "storage": {"exe": "openfield-storage.exe", "dir": "storage"},
-    "chat": {"exe": "openfield-chat.exe", "dir": "chat"},
-    "posts": {"exe": "openfield-posts.exe", "dir": "posts"},
-    "push": {"exe": "openfield-push.exe", "dir": "push"},
+    "gateway": {"exe": "openfield-gateway", "dir": "gateway"},
+    "account": {"exe": "openfield-account", "dir": "account"},
+    "storage": {"exe": "openfield-storage", "dir": "storage"},
+    "chat": {"exe": "openfield-chat", "dir": "chat"},
+    "posts": {"exe": "openfield-posts", "dir": "posts"},
+    "push": {"exe": "openfield-push", "dir": "push"},
 }
 
 # Keep references to open log files so they aren't garbage collected.
@@ -49,20 +56,31 @@ def save_config(cfg):
 def pid_alive(pid):
     if not pid:
         return False
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if handle:
-        ctypes.windll.kernel32.CloseHandle(handle)
+    if os.name == "nt":
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    try:
+        os.kill(pid, 0)
         return True
-    return False
+    except OSError:
+        return False
 
 
 def bin_dir(root):
     return os.path.join(root, "bin")
 
 
+def service_exe_name(name):
+    """Built binary file name for a service (with platform-appropriate suffix)."""
+    return SERVICES[name]["exe"] + _exe_suffix()
+
+
 def service_exe_path(root, name):
-    return os.path.join(bin_dir(root), SERVICES[name]["exe"])
+    return os.path.join(bin_dir(root), service_exe_name(name))
 
 
 def discover(root):
@@ -70,15 +88,16 @@ def discover(root):
     root = root or ""
     bdir = bin_dir(root) if root else ""
     result = []
-    for name, meta in SERVICES.items():
-        exe_path = os.path.join(bdir, meta["exe"]) if bdir else ""
+    for name in SERVICES:
+        exe_name = service_exe_name(name)
+        exe_path = os.path.join(bdir, exe_name) if bdir else ""
         built = os.path.isfile(exe_path) if exe_path else False
         pid = None
         result.append(
             {
                 "name": name,
-                "exe": meta["exe"],
-                "source_dir": meta["dir"],
+                "exe": exe_name,
+                "source_dir": SERVICES[name]["dir"],
                 "built": built,
                 "exe_path": exe_path,
                 "running": False,
@@ -116,6 +135,11 @@ def start_service(cfg, name):
     log_file = open(log_path, "a", encoding="utf-8", buffering=1)
     _open_log_files[name] = log_file
 
+    if os.name == "nt":
+        kwargs = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS}
+    else:
+        kwargs = {"start_new_session": True}
+
     try:
         proc = subprocess.Popen(
             [exe_path],
@@ -123,7 +147,7 @@ def start_service(cfg, name):
             stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=log_file,
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS,
+            **kwargs,
         )
     except OSError as e:
         log_file.close()
@@ -142,11 +166,14 @@ def stop_service(cfg, name):
         save_config(cfg)
         return True, f"{name} 未在运行"
     try:
-        subprocess.run(
-            ["taskkill", "/PID", str(pid), "/T", "/F"],
-            capture_output=True,
-            timeout=30,
-        )
+        if os.name == "nt":
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                capture_output=True,
+                timeout=30,
+            )
+        else:
+            os.kill(pid, signal.SIGTERM)
     except (OSError, subprocess.TimeoutExpired):
         pass
     cfg.get("pids", {}).pop(name, None)
