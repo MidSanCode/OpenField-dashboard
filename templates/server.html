@@ -4,31 +4,6 @@
 <h2 class="page-title"><i class="bi bi-server me-2 text-primary"></i>服务管理</h2>
 
 <div class="card mb-4">
-  <div class="card-body d-flex align-items-center gap-3">
-    <i class="bi bi-database-check fs-3 {{ 'text-success' if db_initialized else 'text-danger' }}"></i>
-    <div class="flex-grow-1">
-      <h5 class="fw-bold mb-1">
-        数据库状态：
-        {% if db_initialized %}
-          <span class="badge text-bg-success">已初始化</span>
-        {% else %}
-          <span class="badge text-bg-danger">未初始化</span>
-        {% endif %}
-      </h5>
-      <p class="text-muted small mb-0">
-        全新的数据库会在管理面板启动时自动初始化（通过 account 服务的迁移）。
-        也可以手动触发：
-      </p>
-    </div>
-    <form method="post" action="{{ url_for('server_init_db') }}">
-      <button class="btn {{ 'btn-outline-secondary' if db_initialized else 'btn-primary' }}" type="submit">
-        <i class="bi bi-database-fill-up me-1"></i>初始化数据库
-      </button>
-    </form>
-  </div>
-</div>
-
-<div class="card mb-4">
   <div class="card-body">
     <h5 class="card-title fw-bold"><i class="bi bi-folder2-open me-2"></i>服务器根目录</h5>
     <p class="text-muted small mb-3">

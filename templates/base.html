@@ -108,6 +108,20 @@
       <i class="bi bi-list me-1"></i>菜单
     </button>
     {% endif %}
+    {% if db_status and not db_status.ok %}
+    <div class="alert alert-warning d-flex align-items-start gap-2">
+      <i class="bi bi-exclamation-triangle-fill fs-5"></i>
+      <div>
+        {% if db_status.error %}
+          <strong>数据库连接异常：</strong>{{ db_status.error }}
+        {% else %}
+          <strong>数据库缺少内容：</strong>以下数据表不存在：{{ db_status.missing|join('、') }}
+        {% endif %}
+        <div class="small mt-1">数据页面暂不可读。请到
+          <a href="{{ url_for('db_page') }}">数据库管理</a> 面板执行修复或初始化。</div>
+      </div>
+    </div>
+    {% endif %}
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% for category, message in messages %}
         <div class="alert alert-{{ 'success' if category == 'success' else 'danger' if category == 'error' else 'info' }} alert-dismissible fade show" role="alert">

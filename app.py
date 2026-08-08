@@ -5,6 +5,7 @@ import tempfile
 import uuid
 
 import bcrypt
+import psycopg2
 from flask import (
     Flask,
     abort,
@@ -27,38 +28,54 @@ app.config["SECRET_KEY"] = config.SECRET_KEY
 app.config["SESSION_COOKIE_NAME"] = config.SESSION_COOKIE_NAME
 app.config["SESSION_COOKIE_HTTPONLY"] = config.SESSION_COOKIE_HTTPONLY
 
-db.init_admin_table()
+# Ensure the admin account table exists, but never let a database outage stop
+# the panel from booting.
+try:
+    db.init_admin_table()
+except Exception as e:
+    app.logger.error("failed to initialize admin table at startup: %s", e)
 
 
 # ---------- initialization ----------
 
 def initialize_database():
-    """Ensure the OpenField schema exists.
+    """Ensure the OpenField schema exists by running the Go server migrations.
 
-    On a brand-new database (no OpenField tables yet) this automatically runs
-    the Go server's migrations via the account service in migrate-only mode.
-
-    The whole check-and-migrate sequence is guarded by a PostgreSQL advisory
-    lock so concurrent processes cannot initialize the schema twice.
+    Only ever invoked from the database management panel. Re-running is safe
+    (the server migrations use CREATE TABLE IF NOT EXISTS), so this can also
+    repair a partially-initialized schema. Returns (ok, message).
     """
-    if db.is_initialized():
+    status = db.schema_status()
+    if status["ok"]:
         return True, "数据库已初始化"
     cfg = server_manager.load_config()
-    with db.advisory_lock(config.DB_INIT_LOCK_ID):
-        # Re-check inside the lock: another process may have finished first.
-        if db.is_initialized():
-            return True, "数据库已初始化"
-        ok, msg = server_manager.run_migrations(cfg)
-        if ok:
-            # Now that the schema exists, create the admin tables that depend on it.
-            db.init_admin_table()
-            app.logger.info("database auto-initialized: %s", msg)
-        else:
-            app.logger.error("database auto-initialization failed: %s", msg)
-        return ok, msg
+    try:
+        with db.advisory_lock(config.DB_INIT_LOCK_ID):
+            # Re-check inside the lock: another process may have finished first.
+            if db.schema_status()["ok"]:
+                return True, "数据库已初始化"
+            ok, msg = server_manager.run_migrations(cfg)
+            if ok:
+                db.init_admin_table()
+                db.invalidate_schema_status()
+                app.logger.info("database initialized: %s", msg)
+            else:
+                app.logger.error("database initialization failed: %s", msg)
+            return ok, msg
+    except psycopg2.Error as e:
+        return False, f"数据库连接失败: {e}"
 
 
-initialize_database()
+@app.context_processor
+def inject_db_status():
+    return {"db_status": db.schema_status()}
+
+
+@app.errorhandler(psycopg2.Error)
+def handle_db_error(exc):
+    """Any database error renders a friendly page instead of a crash."""
+    app.logger.error("database error: %s", exc)
+    return render_template("db_unavailable.html", error=str(exc)), 200
 
 
 # ---------- auth ----------
@@ -143,19 +160,7 @@ def server_page():
         config=cfg,
         services=services,
         server_root=cfg.get("server_root", ""),
-        db_initialized=db.is_initialized(),
     )
-
-
-@app.route("/server/init-db", methods=["POST"])
-@login_required
-def server_init_db():
-    if db.is_initialized():
-        flash("数据库已初始化，禁止重复初始化。如需恢复数据请使用「导入备份」。", "error")
-        return redirect(url_for("server_page"))
-    ok, msg = initialize_database()
-    flash(msg, "success" if ok else "error")
-    return redirect(url_for("server_page"))
 
 
 # ---------- database management ----------
@@ -165,7 +170,7 @@ def server_init_db():
 def db_page():
     return render_template(
         "db.html",
-        db_initialized=db.is_initialized(),
+        db_status=db.schema_status(),
         backups=db_admin.list_backups(),
     )
 
@@ -173,8 +178,9 @@ def db_page():
 @app.route("/db/init", methods=["POST"])
 @login_required
 def db_init():
-    if db.is_initialized():
-        flash("数据库已初始化，禁止重复初始化。如需恢复数据请使用「导入备份」。", "error")
+    status = db.schema_status()
+    if status["ok"]:
+        flash("数据库已完整初始化，禁止重复初始化。如需恢复数据请使用「导入备份」。", "error")
         return redirect(url_for("db_page"))
     ok, msg = initialize_database()
     flash(msg, "success" if ok else "error")
@@ -208,6 +214,8 @@ def db_import():
     try:
         file.save(tmp_path)
         ok, msg = db_admin.import_backup(tmp_path)
+        if ok:
+            db.invalidate_schema_status()
         flash(msg, "success" if ok else "error")
     except Exception as e:
         app.logger.error("failed to import backup: %s", e)

@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}数据库不可读{% endblock %}
+{% block content %}
+<div class="text-center py-5">
+  <i class="bi bi-database-x fs-1 text-warning"></i>
+  <h3 class="fw-bold mt-3">数据库数据不可读</h3>
+  <p class="text-muted">
+    数据库缺少内容或暂时无法连接，相关数据页面暂不可用，但管理面板本身仍可正常使用。
+  </p>
+  {% if session.admin_id %}
+  <p class="text-muted">请前往「数据库管理」面板执行修复或初始化。</p>
+  <a class="btn btn-primary mt-2" href="{{ url_for('db_page') }}">
+    <i class="bi bi-database me-1"></i>前往数据库管理
+  </a>
+  {% else %}
+  <p class="text-muted">请确认数据库服务已启动后重新登录。</p>
+  <a class="btn btn-primary mt-2" href="{{ url_for('login') }}">重新登录</a>
+  {% endif %}
+  {% if error %}
+  <div class="text-start mx-auto mt-4" style="max-width: 640px;">
+    <p class="small text-muted mb-1">错误详情：</p>
+    <pre class="small bg-light p-2 rounded"><code>{{ error }}</code></pre>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
