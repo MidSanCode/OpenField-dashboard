@@ -1,5 +1,6 @@
 import functools
 import io
+import math
 import os
 import tempfile
 import uuid
@@ -326,12 +327,39 @@ def server_stop_all():
 
 @app.route("/users")
 @login_required
+def level_for_exp(exp):
+    """Derives a user level from lifetime exp, matching the server formula."""
+    if not exp or exp <= 0:
+        return 0
+    lvl = math.ceil(math.log(1 + 1.05 * exp / 100) / math.log(1.05))
+    return max(0, min(200, lvl))
+
+
+TIERS = [
+    (10, "出发", "#9E9E9E"), (20, "徒步", "#7CB342"), (30, "听风", "#42A5F5"),
+    (40, "赤足", "#B7611A"), (50, "燃火", "#E64A19"), (60, "共行", "#FFB300"),
+    (70, "迷途", "#9575CD"), (80, "自鸣", "#EC6B8F"), (90, "越岭", "#757575"),
+    (100, "高原", "#2C3E70"), (110, "观星", "#5B2C8E"), (120, "入画", "#A1672C"),
+    (130, "风蚀", "#D4B86A"), (140, "绿洲", "#2E8B57"), (150, "如石", "#37474F"),
+    (160, "俯瞰", "#4A90D9"), (170, "合一", "#00C48C"), (180, "回响", "#D9A13E"),
+    (190, "无名", "#1F1F1F"), (200, "源起", "#4A90D9"),
+]
+
+
+def tier_for_level(level):
+    """Returns the (name, color) tier for a level, matching the client table."""
+    for top, name, color in TIERS:
+        if level <= top:
+            return name, color
+    return TIERS[-1][1], TIERS[-1][2]
+
+
 def users():
     query = request.args.get("q", "").strip()
     base_select = (
         "SELECT u.id, u.username, u.nickname, u.email, u.avatar_url, u.role, "
         "u.needs_registration, u.oauth2_provider, u.storage_quota, u.is_verified, "
-        "u.verified_note, u.verified_by, u.created_at, "
+        "u.verified_note, u.verified_by, u.exp, u.created_at, "
         "COALESCE((SELECT SUM(a.size_bytes) FROM attachments a WHERE a.user_id = u.id), 0) AS storage_used, "
         "COALESCE((SELECT w.balance FROM wallets w WHERE w.user_id = u.id), 0) AS wallet_balance "
         "FROM users u "
@@ -346,6 +374,9 @@ def users():
         )
     else:
         rows = db.fetch_all(base_select + "ORDER BY u.created_at DESC")
+    for row in rows:
+        row["level"] = level_for_exp(row.get("exp"))
+        row["tier_name"], row["tier_color"] = tier_for_level(row["level"])
     return render_template("users.html", users=rows, query=query)
 
 

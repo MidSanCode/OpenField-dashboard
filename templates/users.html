@@ -22,7 +22,7 @@
       <thead>
         <tr>
           <th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>头像</th>
-          <th>角色</th><th>认证</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>钱包</th><th>创建时间</th><th class="text-end">操作</th>
+          <th>角色</th><th>认证</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>等级 / 经验</th><th>钱包</th><th>创建时间</th><th class="text-end">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -117,6 +117,15 @@
             </form>
           </td>
           <td>
+            <div class="d-flex align-items-center gap-1">
+              <span class="badge" style="background-color: {{ u.tier_color }}33; color: {{ u.tier_color }};">
+                {{ u.tier_name }}
+              </span>
+              <span class="fw-medium">Lv.{{ u.level }}</span>
+            </div>
+            <div class="small text-muted">{{ u.exp or 0 }} 经验</div>
+          </td>
+          <td>
             <div class="text-nowrap fw-medium">{{ (u.wallet_balance / 100) | round(2) }}</div>
             <div class="d-inline-flex gap-1 mt-1">
               <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#walletModal{{ u.id }}" title="调整余额">
@@ -205,7 +214,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="13" class="text-center text-muted py-4">没有找到用户</td></tr>
+        <tr><td colspan="14" class="text-center text-muted py-4">没有找到用户</td></tr>
         {% endfor %}
       </tbody>
     </table>
