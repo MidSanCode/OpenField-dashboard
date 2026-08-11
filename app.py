@@ -1,6 +1,5 @@
 import functools
 import io
-import math
 import os
 import tempfile
 import uuid
@@ -325,14 +324,44 @@ def server_stop_all():
 
 # ---------- users ----------
 
-@app.route("/users")
-@login_required
+
+def _level_costs():
+    """Exp required to advance from level i+1 to i+2; each level costs 5% more
+    than the previous, rounded to the nearest integer (matching the server)."""
+    costs = []
+    cost = 100
+    for _ in range(200):
+        costs.append(cost)
+        cost = int(cost * 1.05 + 0.5)
+    return costs
+
+
+_LEVEL_COSTS = _level_costs()
+
+
+def _cum_thresholds():
+    """Total exp required to *reach* level i+1 (level 1 costs 0)."""
+    thresholds = [0]
+    for c in _LEVEL_COSTS:
+        thresholds.append(thresholds[-1] + c)
+    return thresholds
+
+
+_CUM_THRESHOLDS = _cum_thresholds()
+
+
 def level_for_exp(exp):
     """Derives a user level from lifetime exp, matching the server formula."""
     if not exp or exp <= 0:
-        return 0
-    lvl = math.ceil(math.log(1 + 1.05 * exp / 100) / math.log(1.05))
-    return max(0, min(200, lvl))
+        return 1
+    lo, hi = 1, 200
+    while lo <= hi:
+        mid = (lo + hi) // 2
+        if _CUM_THRESHOLDS[mid - 1] <= exp:
+            lo = mid + 1
+        else:
+            hi = mid - 1
+    return hi
 
 
 TIERS = [
@@ -354,6 +383,8 @@ def tier_for_level(level):
     return TIERS[-1][1], TIERS[-1][2]
 
 
+@app.route("/users")
+@login_required
 def users():
     query = request.args.get("q", "").strip()
     base_select = (
