@@ -22,7 +22,7 @@
       <thead>
         <tr>
           <th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>头像</th>
-          <th>角色</th><th>认证</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>等级 / 经验</th><th>钱包</th><th>创建时间</th><th class="text-end">操作</th>
+          <th>角色</th><th>认证</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>等级 / 经验</th><th>会员</th><th>钱包</th><th>创建时间</th><th class="text-end">操作</th>
         </tr>
       </thead>
       <tbody>
@@ -126,6 +126,62 @@
             <div class="small text-muted">{{ u.exp or 0 }} 经验</div>
           </td>
           <td>
+            {% if u.member_level and u.member_level > 0 %}
+              <span class="badge {{ 'text-bg-success' if u.member_active else 'badge-soft-pending' }}">
+                {{ u.member_tier_name }}
+              </span>
+              <div class="small text-muted">
+                {% if u.member_expires_at %}
+                  {{ u.member_expires_at.strftime('%Y-%m-%d') }}
+                  {% if not u.member_active %}（已过期）{% endif %}
+                {% else %}
+                  永久
+                {% endif %}
+              </div>
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+            <button class="btn btn-sm btn-outline-primary mt-1" data-bs-toggle="modal"
+                    data-bs-target="#memberModal{{ u.id }}" title="授予 / 修改会员">
+              <i class="bi bi-gem"></i>
+            </button>
+            <div class="modal fade" id="memberModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+              <div class="modal-dialog modal-dialog-centered">
+                <div class="modal-content text-start">
+                  <form method="post" action="{{ url_for('user_membership', user_id=u.id) }}">
+                    <div class="modal-header">
+                      <h5 class="modal-title"><i class="bi bi-gem me-2"></i>授予会员：{{ u.username }}</h5>
+                      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                      <p class="text-muted small mb-3">
+                        当前：{% if u.member_level and u.member_level > 0 %}{{ u.member_tier_name }}（{{ '有效' if u.member_active else '已过期' }}）{% else %}无{% endif %}
+                      </p>
+                      <div class="mb-3">
+                        <label class="form-label">会员等级</label>
+                        <select class="form-select" name="level">
+                          <option value="0">无（清除会员）</option>
+                          <option value="1">薄雾（Lv.1）</option>
+                          <option value="2">篝火（Lv.2）</option>
+                          <option value="3">明月（Lv.3）</option>
+                          <option value="4">孤星（Lv.4）</option>
+                        </select>
+                      </div>
+                      <div class="mb-3">
+                        <label class="form-label">时长（天）</label>
+                        <input type="number" min="1" class="form-control" name="days" value="30" placeholder="默认 30 天">
+                      </div>
+                    </div>
+                    <div class="modal-footer">
+                      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+                      <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>确认</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+          </td>
+          <td>
             <div class="text-nowrap fw-medium">{{ (u.wallet_balance / 100) | round(2) }}</div>
             <div class="d-inline-flex gap-1 mt-1">
               <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#walletModal{{ u.id }}" title="调整余额">
@@ -214,7 +270,7 @@
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="14" class="text-center text-muted py-4">没有找到用户</td></tr>
+        <tr><td colspan="15" class="text-center text-muted py-4">没有找到用户</td></tr>
         {% endfor %}
       </tbody>
     </table>

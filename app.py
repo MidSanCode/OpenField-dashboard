@@ -3,6 +3,7 @@ import io
 import os
 import tempfile
 import uuid
+import datetime
 
 import bcrypt
 import psycopg2
@@ -383,6 +384,28 @@ def tier_for_level(level):
     return TIERS[-1][1], TIERS[-1][2]
 
 
+MEMBER_TIER_NAMES = {
+    1: "薄雾（Lv.1）",
+    2: "篝火（Lv.2）",
+    3: "明月（Lv.3）",
+    4: "孤星（Lv.4）",
+}
+
+
+def member_status(member_level, member_expires_at, now=None):
+    """Returns (active, tier_name) for a member level and expiry, or (False, None) if not a member."""
+    level = member_level or 0
+    if level <= 0:
+        return False, None
+    name = MEMBER_TIER_NAMES.get(level, f"Lv.{level}")
+    if member_expires_at is None:
+        return False, name
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    if member_expires_at.tzinfo is None:
+        now = now.replace(tzinfo=None)
+    return member_expires_at > now, name
+
+
 @app.route("/users")
 @login_required
 def users():
@@ -390,7 +413,8 @@ def users():
     base_select = (
         "SELECT u.id, u.username, u.nickname, u.email, u.avatar_url, u.role, "
         "u.needs_registration, u.oauth2_provider, u.storage_quota, u.is_verified, "
-        "u.verified_note, u.verified_by, u.exp, u.created_at, "
+        "u.verified_note, u.verified_by, u.exp, u.member_level, u.member_expires_at, "
+        "u.created_at, "
         "COALESCE((SELECT SUM(a.size_bytes) FROM attachments a WHERE a.user_id = u.id), 0) AS storage_used, "
         "COALESCE((SELECT w.balance FROM wallets w WHERE w.user_id = u.id), 0) AS wallet_balance "
         "FROM users u "
@@ -408,6 +432,9 @@ def users():
     for row in rows:
         row["level"] = level_for_exp(row.get("exp"))
         row["tier_name"], row["tier_color"] = tier_for_level(row["level"])
+        row["member_active"], row["member_tier_name"] = member_status(
+            row.get("member_level"), row.get("member_expires_at")
+        )
     return render_template("users.html", users=rows, query=query)
 
 
@@ -568,6 +595,47 @@ def user_wallet_history(user_id):
         total_pages=total_pages,
         total=total,
     )
+
+
+@app.route("/users/<int:user_id>/membership", methods=["POST"])
+@login_required
+def user_membership(user_id):
+    user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
+    try:
+        level = int(request.form.get("level", "0"))
+    except ValueError:
+        flash("Invalid membership level.", "error")
+        return redirect(url_for("users"))
+    if level < 0 or level > 4:
+        flash("Membership level must be between 0 and 4.", "error")
+        return redirect(url_for("users"))
+    if level == 0:
+        db.execute(
+            "UPDATE users SET member_level = 0, member_expires_at = NULL, "
+            "updated_at = NOW() WHERE id = %s",
+            (user_id,),
+        )
+        flash(f"已清除 {user['username']} 的会员。", "success")
+        return redirect(url_for("users"))
+    days_text = request.form.get("days", "").strip()
+    try:
+        days = int(days_text) if days_text else 30
+    except ValueError:
+        flash("Invalid days value.", "error")
+        return redirect(url_for("users"))
+    if days <= 0:
+        flash("Days must be greater than 0.", "error")
+        return redirect(url_for("users"))
+    expires_at = datetime.datetime.now() + datetime.timedelta(days=days)
+    db.execute(
+        "UPDATE users SET member_level = %s, member_expires_at = %s, "
+        "updated_at = NOW() WHERE id = %s",
+        (level, expires_at, user_id),
+    )
+    flash(f"已授予 {user['username']} {MEMBER_TIER_NAMES.get(level, f'Lv.{level}')} 会员 ({days} 天)。", "success")
+    return redirect(url_for("users"))
 
 
 @app.route("/users/<int:user_id>/role", methods=["POST"])

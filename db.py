@@ -115,6 +115,12 @@ def init_admin_table():
         execute(
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS verified_by VARCHAR(255) NOT NULL DEFAULT ''"
         )
+        execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS member_level BIGINT NOT NULL DEFAULT 0"
+        )
+        execute(
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS member_expires_at TIMESTAMPTZ"
+        )
         # Audit trail for admin wallet adjustments: keep the acting admin account
         # name even when the operator has no matching users row (operator_id stays
         # NULL in that case so the FK to users(id) is never violated).
