@@ -699,6 +699,13 @@ def user_verified(user_id):
     verified = request.form.get("verified") == "1"
     verified_by = request.form.get("verified_by", "").strip()
     verified_note = request.form.get("verified_note", "").strip()
+    # Writing verification detail (对象/内容) implies an active verification
+    # even when the quick toggle was left off, so the badge reliably appears
+    # after the user's name.
+    if verified_by or verified_note:
+        verified = True
+    if verified and not verified_by:
+        verified_by = "admin"
     db.execute(
         "UPDATE users SET is_verified = %s, verified_by = %s, verified_note = %s, updated_at = NOW() WHERE id = %s",
         (verified, verified_by, verified_note, user_id),
