@@ -414,6 +414,7 @@ def users():
         "SELECT u.id, u.username, u.nickname, u.email, u.avatar_url, u.role, "
         "u.needs_registration, u.oauth2_provider, u.storage_quota, u.is_verified, "
         "u.verified_note, u.verified_by, u.exp, u.member_level, u.member_expires_at, "
+        "u.status, u.banned_until, "
         "u.created_at, "
         "COALESCE((SELECT SUM(a.size_bytes) FROM attachments a WHERE a.user_id = u.id), 0) AS storage_used, "
         "COALESCE((SELECT w.balance FROM wallets w WHERE w.user_id = u.id), 0) AS wallet_balance "
@@ -650,6 +651,136 @@ def user_role(user_id):
     db.execute("UPDATE users SET role = %s, updated_at = NOW() WHERE id = %s", (role, user_id))
     flash("Role updated.", "success")
     return redirect(url_for("users"))
+
+
+@app.route("/users/<int:user_id>/punish", methods=["POST"])
+@login_required
+def user_punish(user_id):
+    """Record a moderation action and apply its side effects.
+
+    Types mirror the server's model.PunishmentType:
+      warning    - 警告：仅记录
+      demerit    - 记过：仅记录（可多次累加）
+      revoke     - 剥夺权限：需指定 permission_key
+      temp_ban   - 暂时封禁：需指定 hours 时长
+      ban        - 永久封禁
+      unban      - 解除封禁（并清除所有权限封禁）
+      restore    - 恢复权限：需指定 permission_key
+    """
+    user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
+    ptype = request.form.get("type", "").strip()
+    reason = request.form.get("reason", "").strip()
+    if ptype not in ("warning", "demerit", "revoke", "temp_ban", "ban", "unban", "restore"):
+        flash("Unknown punishment type.", "error")
+        return redirect(url_for("users"))
+
+    if ptype in ("revoke", "restore"):
+        perm_key = request.form.get("permission_key", "").strip()
+        if not perm_key:
+            flash("请选择要剥夺 / 恢复的权限。", "error")
+            return redirect(url_for("users"))
+    else:
+        perm_key = ""
+
+    expires_at = None
+    if ptype == "temp_ban":
+        try:
+            hours = float(request.form.get("hours", "").strip())
+        except ValueError:
+            flash("请输入有效的封禁时长。", "error")
+            return redirect(url_for("users"))
+        if hours <= 0:
+            flash("封禁时长必须大于 0。", "error")
+            return redirect(url_for("users"))
+        expires_at = datetime.datetime.now() + datetime.timedelta(hours=hours)
+
+    # Apply the side effect in the same transaction as the history record.
+    db.execute(
+        "INSERT INTO user_punishments (user_id, operator_id, type, permission_key, reason, expires_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (user_id, None, ptype, perm_key, reason, expires_at),
+    )
+    if ptype == "revoke":
+        db.execute(
+            "INSERT INTO user_permission_bans (user_id, permission_key, reason) "
+            "VALUES (%s, %s, %s) ON CONFLICT (user_id, permission_key) "
+            "DO UPDATE SET reason = EXCLUDED.reason",
+            (user_id, perm_key, reason),
+        )
+    elif ptype == "temp_ban":
+        db.execute(
+            "UPDATE users SET status = 'banned', banned_until = %s, updated_at = NOW() WHERE id = %s",
+            (expires_at, user_id),
+        )
+    elif ptype == "ban":
+        db.execute(
+            "UPDATE users SET status = 'banned', banned_until = NULL, updated_at = NOW() WHERE id = %s",
+            (user_id,),
+        )
+    elif ptype == "unban":
+        db.execute(
+            "UPDATE users SET status = 'active', banned_until = NULL, updated_at = NOW() WHERE id = %s",
+            (user_id,),
+        )
+        db.execute("DELETE FROM user_permission_bans WHERE user_id = %s", (user_id,))
+    elif ptype == "restore":
+        db.execute(
+            "DELETE FROM user_permission_bans WHERE user_id = %s AND permission_key = %s",
+            (user_id, perm_key),
+        )
+
+    if ptype == "temp_ban":
+        flash(f"已暂时封禁 {user['username']} {hours:g} 小时。", "success")
+    elif ptype == "ban":
+        flash(f"已永久封禁 {user['username']}。", "success")
+    elif ptype == "unban":
+        flash(f"已解除封禁 {user['username']}。", "success")
+    else:
+        flash(f"已对 {user['username']} 执行「{ptype}」。", "success")
+    return redirect(url_for("user_punishment_history", user_id=user_id))
+
+
+@app.route("/users/<int:user_id>/punishments")
+@login_required
+def user_punishment_history(user_id):
+    user = db.fetch_one(
+        "SELECT id, username, nickname, status, banned_until FROM users WHERE id = %s",
+        (user_id,),
+    )
+    if not user:
+        abort(404)
+    rows = db.fetch_all(
+        "SELECT p.id, p.type, p.permission_key, p.reason, p.expires_at, p.created_at, "
+        "       COALESCE(op.username, '系统') AS operator "
+        "FROM user_punishments p "
+        "LEFT JOIN users op ON op.id = p.operator_id "
+        "WHERE p.user_id = %s ORDER BY p.id DESC",
+        (user_id,),
+    )
+    perm_rows = db.fetch_all(
+        "SELECT permission_key, reason, created_at FROM user_permission_bans "
+        "WHERE user_id = %s ORDER BY created_at DESC",
+        (user_id,),
+    )
+    for r in rows:
+        r["type_label"] = {
+            "warning": "警告",
+            "demerit": "记过",
+            "revoke": "剥夺权限",
+            "temp_ban": "暂时封禁",
+            "ban": "永久封禁",
+            "unban": "解除封禁",
+            "restore": "恢复权限",
+        }.get(r["type"], r["type"])
+    return render_template(
+        "user_punishments.html",
+        user=user,
+        punishments=rows,
+        permission_bans=perm_rows,
+        permission_keys=_all_permission_keys(),
+    )
 
 
 @app.route("/admins")

@@ -1,0 +1,163 @@
+{% extends "base.html" %}
+{% block title %}处罚记录 · {{ user.username }}{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap gap-2 align-items-center mb-3">
+  <h2 class="page-title mb-0"><i class="bi bi-gavel me-2 text-primary"></i>处罚管理</h2>
+  <a class="btn btn-outline-secondary ms-auto" href="{{ url_for('users') }}"><i class="bi bi-arrow-left me-1"></i>返回用户管理</a>
+</div>
+
+<div class="card table-card mb-3">
+  <div class="card-body py-2 d-flex flex-wrap gap-3 align-items-center">
+    <span><span class="text-muted">用户：</span><strong>#{{ user.id }} {{ user.username }}</strong>
+      {% if user.nickname %}<span class="text-muted">（{{ user.nickname }}）</span>{% endif %}
+    </span>
+    {% if user.status == 'banned' %}
+      <span class="badge text-bg-danger"><i class="bi bi-slash-circle me-1"></i>封禁中</span>
+      {% if user.banned_until %}<span class="text-muted small">{{ user.banned_until.strftime('%Y-%m-%d %H:%M') }} 自动解封</span>{% endif %}
+    {% else %}
+      <span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>正常</span>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card mb-4">
+  <div class="card-header"><i class="bi bi-journal-plus me-1 text-primary"></i>执行处罚</div>
+  <div class="card-body">
+    <form method="post" action="{{ url_for('user_punish', user_id=user.id) }}" class="row g-3 align-items-end">
+      <div class="col-md-3">
+        <label class="form-label">类型</label>
+        <select class="form-select" name="type" id="punishType">
+          <option value="warning">警告（仅记录）</option>
+          <option value="demerit">记过（仅记录）</option>
+          <option value="revoke">剥夺权限</option>
+          <option value="temp_ban">暂时封禁</option>
+          <option value="ban">永久封禁</option>
+          <option value="unban">解除封禁</option>
+          <option value="restore">恢复权限</option>
+        </select>
+      </div>
+      <div class="col-md-3" id="permField" style="display:none;">
+        <label class="form-label">权限键</label>
+        <select class="form-select" name="permission_key">
+          {% for k in permission_keys %}
+          <option value="{{ k }}">{{ k }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="col-md-2" id="hoursField" style="display:none;">
+        <label class="form-label">时长（小时）</label>
+        <input type="number" step="0.5" min="0.5" class="form-control" name="hours" value="24">
+      </div>
+      <div class="col-md-4">
+        <label class="form-label">原因</label>
+        <input type="text" class="form-control" name="reason" placeholder="处罚原因（必填可留空）">
+      </div>
+      <div class="col-md-auto">
+        <button class="btn btn-warning" type="submit" id="punishSubmit"><i class="bi bi-gavel me-1"></i>确认执行</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="row g-3 mb-3">
+  <div class="col-lg-6">
+    <div class="card table-card h-100">
+      <div class="card-header"><i class="bi bi-list-check me-1 text-primary"></i>当前有效权限封禁</div>
+      <div class="table-responsive">
+        <table class="table align-middle mb-0">
+          <thead>
+            <tr><th>权限键</th><th>原因</th><th>时间</th></tr>
+          </thead>
+          <tbody>
+            {% for pb in permission_bans %}
+            <tr>
+              <td><code>{{ pb.permission_key }}</code></td>
+              <td class="text-muted">{{ pb.reason or '—' }}</td>
+              <td class="text-muted small text-nowrap">{{ pb.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+            </tr>
+            {% else %}
+            <tr><td colspan="3" class="text-center text-muted py-4">暂无有效权限封禁</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-6">
+    <div class="card">
+      <div class="card-header"><i class="bi bi-shield-exclamation me-1 text-primary"></i>当前封禁状态</div>
+      <div class="card-body">
+        <div class="d-flex align-items-center gap-2">
+          {% if user.status == 'banned' %}
+            <span class="badge text-bg-danger">封禁中</span>
+            {% if user.banned_until %}
+              <span class="text-muted">{{ user.banned_until.strftime('%Y-%m-%d %H:%M %Z') }} 自动解封</span>
+            {% else %}
+              <span class="text-muted">永久封禁，需手动解除</span>
+            {% endif %}
+          {% else %}
+            <span class="badge text-bg-success">正常</span>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card table-card">
+  <div class="card-header"><i class="bi bi-clock-history me-1 text-primary"></i>历史记录</div>
+  <div class="table-responsive">
+    <table class="table align-middle mb-0">
+      <thead>
+        <tr><th>ID</th><th>类型</th><th>权限键</th><th>原因</th><th>过期时间</th><th>操作人</th><th>时间</th></tr>
+      </thead>
+      <tbody>
+        {% for p in punishments %}
+        <tr>
+          <td class="text-muted">{{ p.id }}</td>
+          <td>
+            {% if p.type == 'ban' or p.type == 'temp_ban' %}
+              <span class="badge text-bg-danger">{{ p.type_label }}</span>
+            {% elif p.type == 'unban' %}
+              <span class="badge text-bg-success">{{ p.type_label }}</span>
+            {% elif p.type == 'revoke' %}
+              <span class="badge text-bg-warning">{{ p.type_label }}</span>
+            {% elif p.type == 'restore' %}
+              <span class="badge text-bg-info">{{ p.type_label }}</span>
+            {% else %}
+              <span class="badge text-bg-secondary">{{ p.type_label }}</span>
+            {% endif %}
+          </td>
+          <td>{% if p.permission_key %}<code>{{ p.permission_key }}</code>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+          <td class="text-muted">{{ p.reason or '—' }}</td>
+          <td class="text-muted small text-nowrap">
+            {{ p.expires_at.strftime('%Y-%m-%d %H:%M') if p.expires_at else '永久' }}
+          </td>
+          <td>{{ p.operator }}</td>
+          <td class="text-muted small text-nowrap">{{ p.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="7" class="text-center text-muted py-4">暂无处罚记录</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    var type = document.getElementById('punishType');
+    var perm = document.getElementById('permField');
+    var hours = document.getElementById('hoursField');
+    var submit = document.getElementById('punishSubmit');
+    function refresh() {
+      var v = type.value;
+      perm.style.display = (v === 'revoke' || v === 'restore') ? '' : 'none';
+      hours.style.display = (v === 'temp_ban') ? '' : 'none';
+      submit.textContent = (v === 'unban') ? '确认解封' : (v === 'ban' ? '确认永久封禁' : (v === 'temp_ban' ? '确认封禁' : '确认执行'));
+    }
+    type.addEventListener('change', refresh);
+    refresh();
+  });
+</script>
+{% endblock %}
