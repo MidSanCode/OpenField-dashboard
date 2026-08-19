@@ -21,22 +21,29 @@
     <table class="table align-middle">
       <thead>
         <tr>
-          <th>ID</th><th>用户名</th><th>昵称</th><th>邮箱</th><th>头像</th>
-          <th>角色</th><th>认证</th><th>状态</th><th>OAuth</th><th>存储空间</th><th>等级 / 经验</th><th>会员</th><th>钱包</th><th>创建时间</th><th class="text-end">操作</th>
+          <th>ID</th><th>用户</th><th>邮箱</th><th>角色</th><th>状态</th><th>创建时间</th><th class="text-end">操作</th>
         </tr>
       </thead>
       <tbody>
         {% for u in users %}
         <tr>
           <td class="text-muted">{{ u.id }}</td>
-          <td class="fw-medium">{{ u.username }}</td>
-          <td>{{ u.nickname }}</td>
-          <td class="text-muted">{{ u.email }}</td>
           <td>
-            {% if u.avatar_url %}
-              <img class="img-thumb rounded-2" src="{{ u.avatar_url }}" alt="avatar">
-            {% endif %}
+            <div class="d-flex align-items-center gap-2">
+              {% if u.avatar_url %}
+                <img class="img-thumb rounded-2" src="{{ u.avatar_url }}" alt="avatar">
+              {% endif %}
+              <div>
+                <div class="fw-medium">
+                  {{ u.username }}
+                  {% if u.is_verified %}<i class="bi bi-patch-check-fill text-primary ms-1" title="已认证"></i>{% endif %}
+                  {% if u.oauth2_provider %}<i class="bi bi-link-45deg ms-1 text-muted" title="OAuth：{{ u.oauth2_provider }}"></i>{% endif %}
+                </div>
+                {% if u.nickname %}<div class="small text-muted">{{ u.nickname }}</div>{% endif %}
+              </div>
+            </div>
           </td>
+          <td class="text-muted">{{ u.email }}</td>
           <td>
             <form method="post" action="{{ url_for('user_role', user_id=u.id) }}">
               <select name="role" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
@@ -46,52 +53,8 @@
             </form>
           </td>
           <td>
-            <form method="post" action="{{ url_for('user_verified', user_id=u.id) }}" title="认证标记 (全局显示在昵称后)">
-              <div class="form-check form-switch m-0">
-                <input type="hidden" name="verified" value="0">
-                <input type="checkbox" class="form-check-input" name="verified" value="1"
-                       {{ 'checked' if u.is_verified }} onchange="this.form.submit()">
-              </div>
-            </form>
-            <button class="btn btn-sm btn-outline-primary mt-1" data-bs-toggle="modal" data-bs-target="#verifyModal{{ u.id }}" title="编辑认证详情">
-              <i class="bi bi-pencil"></i>
-            </button>
-            {% if u.is_verified and u.verified_note %}
-            <div class="small text-muted mt-1" style="max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="{{ u.verified_note }}">
-              {{ u.verified_note[:40] }}{% if u.verified_note|length > 40 %}...{% endif %}
-            </div>
-            {% endif %}
-            <div class="modal fade" id="verifyModal{{ u.id }}" tabindex="-1" aria-hidden="true">
-              <div class="modal-dialog">
-                <div class="modal-content">
-                  <form method="post" action="{{ url_for('user_verified', user_id=u.id) }}">
-                    <div class="modal-header">
-                      <h5 class="modal-title"><i class="bi bi-patch-check me-2"></i>认证：{{ u.username }}</h5>
-                      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                      <div class="mb-3">
-                        <label class="form-label">认证对象</label>
-                        <input type="text" class="form-control" name="verified_by" value="{{ u.verified_by or '' }}" placeholder="例如：知名博主、官方账号">
-                      </div>
-                      <div class="mb-3">
-                        <label class="form-label">认证内容</label>
-                        <textarea class="form-control" name="verified_note" rows="3" placeholder="认证说明（展示在资料页）">{{ u.verified_note or '' }}</textarea>
-                      </div>
-                    </div>
-                    <div class="modal-footer">
-                      <input type="hidden" name="verified" value="{{ '1' if u.is_verified else '0' }}">
-                      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
-                      <button type="submit" class="btn btn-primary">保存认证</button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            </div>
-          </td>
-          <td>
             {% if u.status == 'banned' %}
-              <span class="badge text-bg-danger"><i class="bi bi-slash-circle me-1"></i>封禁中</span>
+              <span class="badge text-bg-danger"><i class="bi bi-slash-circle me-1"></i>封禁</span>
               {% if u.banned_until %}
                 <div class="small text-danger" title="解封时间">
                   {{ u.banned_until.strftime('%Y-%m-%d %H:%M') }} 解封
@@ -105,187 +68,245 @@
               <span class="badge text-bg-success"><i class="bi bi-check-circle me-1"></i>正常</span>
             {% endif %}
           </td>
-          <td>
-            {% if u.oauth2_provider %}
-              <span class="badge text-bg-info"><i class="bi bi-link-45deg me-1"></i>{{ u.oauth2_provider }}</span>
-            {% else %}
-              <span class="text-muted">—</span>
-            {% endif %}
-          </td>
-          <td>
-            <div class="text-nowrap small text-muted">
-              {{ (u.storage_used / 1048576) | round(1) }} MB / {{ (u.storage_quota / 1048576) | round(1) }} MB
-            </div>
-            <form method="post" action="{{ url_for('user_quota', user_id=u.id) }}" class="d-flex gap-1 mt-1" style="max-width: 240px;">
-              <div class="input-group input-group-sm">
-                <input type="number" step="0.5" min="0.5" class="form-control" name="quota_mb"
-                       value="{{ (u.storage_quota / 1048576) | round(1) }}" title="容量 (MB)">
-                <span class="input-group-text">MB</span>
-                <button class="btn btn-outline-primary" type="submit" title="保存容量"><i class="bi bi-check-lg"></i></button>
-              </div>
-            </form>
-          </td>
-          <td>
-            <div class="d-flex align-items-center gap-1">
-              <span class="badge" style="background-color: {{ u.tier_color }}33; color: {{ u.tier_color }};">
-                {{ u.tier_name }}
-              </span>
-              <span class="fw-medium">Lv.{{ u.level }}</span>
-            </div>
-            <div class="small text-muted">{{ u.exp or 0 }} 经验</div>
-          </td>
-          <td>
-            {% if u.member_level and u.member_level > 0 %}
-              <span class="badge {{ 'text-bg-success' if u.member_active else 'badge-soft-pending' }}">
-                {{ u.member_tier_name }}
-              </span>
-              <div class="small text-muted">
-                {% if u.member_expires_at %}
-                  {{ u.member_expires_at.strftime('%Y-%m-%d') }}
-                  {% if not u.member_active %}（已过期）{% endif %}
-                {% else %}
-                  永久
-                {% endif %}
-              </div>
-            {% else %}
-              <span class="text-muted">—</span>
-            {% endif %}
-            <button class="btn btn-sm btn-outline-primary mt-1" data-bs-toggle="modal"
-                    data-bs-target="#memberModal{{ u.id }}" title="授予 / 修改会员">
-              <i class="bi bi-gem"></i>
-            </button>
-            <div class="modal fade" id="memberModal{{ u.id }}" tabindex="-1" aria-hidden="true">
-              <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content text-start">
-                  <form method="post" action="{{ url_for('user_membership', user_id=u.id) }}">
-                    <div class="modal-header">
-                      <h5 class="modal-title"><i class="bi bi-gem me-2"></i>授予会员：{{ u.username }}</h5>
-                      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                      <p class="text-muted small mb-3">
-                        当前：{% if u.member_level and u.member_level > 0 %}{{ u.member_tier_name }}（{{ '有效' if u.member_active else '已过期' }}）{% else %}无{% endif %}
-                      </p>
-                      <div class="mb-3">
-                        <label class="form-label">会员等级</label>
-                        <select class="form-select" name="level">
-                          <option value="0">无（清除会员）</option>
-                          <option value="1">薄雾（Lv.1）</option>
-                          <option value="2">篝火（Lv.2）</option>
-                          <option value="3">明月（Lv.3）</option>
-                          <option value="4">孤星（Lv.4）</option>
-                        </select>
-                      </div>
-                      <div class="mb-3">
-                        <label class="form-label">时长（天）</label>
-                        <input type="number" min="1" class="form-control" name="days" value="30" placeholder="默认 30 天">
-                      </div>
-                    </div>
-                    <div class="modal-footer">
-                      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
-                      <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>确认</button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            </div>
-          </td>
-          <td>
-            <div class="text-nowrap fw-medium">{{ (u.wallet_balance / 100) | round(2) }}</div>
-            <div class="d-inline-flex gap-1 mt-1">
-              <button class="btn btn-sm btn-outline-success" data-bs-toggle="modal" data-bs-target="#walletModal{{ u.id }}" title="调整余额">
-                <i class="bi bi-wallet2"></i>
-              </button>
-              <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('user_wallet_history', user_id=u.id) }}" title="查看余额记录">
-                <i class="bi bi-receipt"></i>
-              </a>
-            </div>
-            <div class="modal fade" id="walletModal{{ u.id }}" tabindex="-1" aria-hidden="true">
-              <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content text-start">
-                  <form method="post" action="{{ url_for('user_wallet', user_id=u.id) }}">
-                    <div class="modal-header">
-                      <h5 class="modal-title"><i class="bi bi-wallet2 me-2"></i>调整钱包：{{ u.username }}</h5>
-                      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                      <p class="text-muted small mb-3">
-                        当前余额：<strong>{{ (u.wallet_balance / 100) | round(2) }}</strong>（正值充值，负值扣款）
-                      </p>
-                      <div class="mb-3">
-                        <label class="form-label">金额</label>
-                        <input type="number" step="0.01" class="form-control" name="amount" required placeholder="例如：100 或 -50">
-                      </div>
-                      <div class="mb-3">
-                        <label class="form-label">备注（可选）</label>
-                        <input type="text" class="form-control" name="description" placeholder="说明本次变动原因">
-                      </div>
-                    </div>
-                    <div class="modal-footer">
-                      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
-                      <button type="submit" class="btn btn-success"><i class="bi bi-check-lg me-1"></i>确认</button>
-                    </div>
-                  </form>
-                </div>
-              </div>
-            </div>
-          </td>
-          <td class="text-muted">{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-          <td class="text-end">
-            <div class="d-inline-flex gap-1">
+          <td class="text-muted text-nowrap">{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td class="text-end text-nowrap">
+            <div class="d-inline-flex gap-1 align-items-center">
               <a class="btn btn-sm btn-outline-warning" href="{{ url_for('user_punishment_history', user_id=u.id) }}" title="处罚 / 封禁">
                 <i class="bi bi-gavel"></i>
               </a>
-              <button type="button" class="btn btn-sm btn-outline-primary" data-bs-toggle="modal"
-                      data-bs-target="#resetPw{{ u.id }}" title="重置密码">
-                <i class="bi bi-key"></i>
-              </button>
-              {% if u.oauth2_provider %}
-              <form method="post" action="{{ url_for('user_unbind_oauth', user_id=u.id) }}" class="d-inline"
-                    onsubmit="return confirm('确认解绑 {{ u.username }} 的 {{ u.oauth2_provider }} 账号?')">
-                <button class="btn btn-sm btn-outline-warning" type="submit" title="解绑 OAuth">
-                  <i class="bi bi-link-45deg"></i>
+              <div class="dropdown">
+                <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" title="更多操作">
+                  <i class="bi bi-three-dots-vertical"></i>
                 </button>
-              </form>
-              {% endif %}
-              <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}" class="d-inline"
-                    onsubmit="return confirm('确认删除用户 {{ u.username }}? 其帖子与消息将一并删除。')">
-                <button class="btn btn-sm btn-outline-danger" type="submit" title="删除">
-                  <i class="bi bi-trash"></i>
-                </button>
-              </form>
-            </div>
-            <div class="modal fade" id="resetPw{{ u.id }}" tabindex="-1" aria-hidden="true">
-              <div class="modal-dialog modal-dialog-centered">
-                <div class="modal-content text-start">
-                  <form method="post" action="{{ url_for('user_reset_password', user_id=u.id) }}">
-                    <div class="modal-header">
-                      <h5 class="modal-title"><i class="bi bi-key me-2"></i>重置密码</h5>
-                      <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                      <p class="text-muted small mb-3">
-                        为 <strong>{{ u.username }}</strong> 设置新密码，保存后该用户需用新密码登录。
-                      </p>
-                      <label class="form-label" for="pw{{ u.id }}">新密码</label>
-                      <input type="password" class="form-control" id="pw{{ u.id }}" name="password"
-                             required placeholder="输入新密码">
-                    </div>
-                    <div class="modal-footer">
-                      <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
-                      <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>保存</button>
-                    </div>
-                  </form>
-                </div>
+                <ul class="dropdown-menu dropdown-menu-end shadow-sm">
+                  <li>
+                    <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#verifyModal{{ u.id }}">
+                      <i class="bi bi-patch-check me-2 text-primary"></i>认证
+                      {% if u.is_verified %}<i class="bi bi-check-circle-fill text-success ms-1"></i>
+                        {% if u.verified_note %}<span class="text-muted small">{{ u.verified_note[:24] }}{% if u.verified_note|length > 24 %}…{% endif %}</span>{% endif %}
+                      {% endif %}
+                    </a>
+                  </li>
+                  <li>
+                    <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#quotaModal{{ u.id }}">
+                      <i class="bi bi-hdd me-2 text-primary"></i>存储空间
+                      <span class="text-muted small">{{ (u.storage_used / 1048576) | round(1) }} / {{ (u.storage_quota / 1048576) | round(1) }} MB</span>
+                    </a>
+                  </li>
+                  <li>
+                    <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#memberModal{{ u.id }}">
+                      <i class="bi bi-gem me-2 text-primary"></i>会员
+                      <span class="text-muted small">
+                        {% if u.member_level and u.member_level > 0 %}{{ u.member_tier_name }}{% if not u.member_active %}（已过期）{% endif %}{% else %}无{% endif %}
+                      </span>
+                    </a>
+                  </li>
+                  <li>
+                    <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#walletModal{{ u.id }}">
+                      <i class="bi bi-wallet2 me-2 text-success"></i>钱包
+                      <span class="text-muted small">{{ (u.wallet_balance / 100) | round(2) }}</span>
+                    </a>
+                  </li>
+                  <li>
+                    <a class="dropdown-item" href="{{ url_for('user_wallet_history', user_id=u.id) }}">
+                      <i class="bi bi-receipt me-2 text-secondary"></i>钱包记录
+                    </a>
+                  </li>
+                  <li>
+                    <span class="dropdown-item-text small text-muted">
+                      <i class="bi bi-star me-2"></i>Lv.{{ u.level }} · {{ u.exp or 0 }} 经验
+                    </span>
+                  </li>
+                  {% if u.oauth2_provider %}
+                  <li>
+                    <form method="post" action="{{ url_for('user_unbind_oauth', user_id=u.id) }}"
+                          onsubmit="return confirm('确认解绑 {{ u.username }} 的 {{ u.oauth2_provider }} 账号?')">
+                      <button class="dropdown-item" type="submit">
+                        <i class="bi bi-link-45deg me-2 text-warning"></i>解绑 OAuth（{{ u.oauth2_provider }}）
+                      </button>
+                    </form>
+                  </li>
+                  {% endif %}
+                  <li><hr class="dropdown-divider"></li>
+                  <li>
+                    <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#resetPw{{ u.id }}">
+                      <i class="bi bi-key me-2 text-primary"></i>重置密码
+                    </a>
+                  </li>
+                  <li>
+                    <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}"
+                          onsubmit="return confirm('确认删除用户 {{ u.username }}? 其帖子与消息将一并删除。')">
+                      <button class="dropdown-item text-danger" type="submit">
+                        <i class="bi bi-trash me-2"></i>删除用户
+                      </button>
+                    </form>
+                  </li>
+                </ul>
               </div>
             </div>
           </td>
         </tr>
         {% else %}
-        <tr><td colspan="15" class="text-center text-muted py-4">没有找到用户</td></tr>
+        <tr><td colspan="7" class="text-center text-muted py-4">没有找到用户</td></tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
 </div>
+
+{% for u in users %}
+<div class="modal fade" id="verifyModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <form method="post" action="{{ url_for('user_verified', user_id=u.id) }}">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-patch-check me-2"></i>认证：{{ u.username }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3 form-check">
+            <input type="checkbox" class="form-check-input" id="verifyToggle{{ u.id }}" name="verified" value="1"
+                   {{ 'checked' if u.is_verified }}>
+            <label class="form-check-label" for="verifyToggle{{ u.id }}">启用认证标记</label>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">认证对象</label>
+            <input type="text" class="form-control" name="verified_by" value="{{ u.verified_by or '' }}" placeholder="例如：知名博主、官方账号">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">认证内容</label>
+            <textarea class="form-control" name="verified_note" rows="3" placeholder="认证说明（展示在资料页）">{{ u.verified_note or '' }}</textarea>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary">保存认证</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="quotaModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content text-start">
+      <form method="post" action="{{ url_for('user_quota', user_id=u.id) }}">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-hdd me-2"></i>存储空间：{{ u.username }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-3">
+            已用 <strong>{{ (u.storage_used / 1048576) | round(1) }}</strong> MB，
+            当前配额 <strong>{{ (u.storage_quota / 1048576) | round(1) }}</strong> MB
+          </p>
+          <div class="mb-3">
+            <label class="form-label">容量配额（MB）</label>
+            <div class="input-group">
+              <input type="number" step="0.5" min="0.5" class="form-control" name="quota_mb"
+                     value="{{ (u.storage_quota / 1048576) | round(1) }}">
+              <span class="input-group-text">MB</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="memberModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content text-start">
+      <form method="post" action="{{ url_for('user_membership', user_id=u.id) }}">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-gem me-2"></i>授予会员：{{ u.username }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-3">
+            当前：{% if u.member_level and u.member_level > 0 %}{{ u.member_tier_name }}（{{ '有效' if u.member_active else '已过期' }}）{% else %}无{% endif %}
+          </p>
+          <div class="mb-3">
+            <label class="form-label">会员等级</label>
+            <select class="form-select" name="level">
+              <option value="0">无（清除会员）</option>
+              <option value="1">薄雾（Lv.1）</option>
+              <option value="2">篝火（Lv.2）</option>
+              <option value="3">明月（Lv.3）</option>
+              <option value="4">孤星（Lv.4）</option>
+            </select>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">时长（天）</label>
+            <input type="number" min="1" class="form-control" name="days" value="30" placeholder="默认 30 天">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>确认</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="walletModal{{ u.id }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content text-start">
+      <form method="post" action="{{ url_for('user_wallet', user_id=u.id) }}">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-wallet2 me-2"></i>调整钱包：{{ u.username }}</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-3">
+            当前余额：<strong>{{ (u.wallet_balance / 100) | round(2) }}</strong>（正值充值，负值扣款）
+          </p>
+          <div class="mb-3">
+            <label class="form-label">金额</label>
+            <input type="number" step="0.01" class="form-control" name="amount" required placeholder="例如：100 或 -50">
+          </div>
+          <div class="mb-3">
+            <label class="form-label">备注（可选）</label>
+            <input type="text" class="form-control" name="description" placeholder="说明本次变动原因">
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-success"><i class="bi bi-check-lg me-1"></i>确认</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="resetPw{{ u.id }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content text-start">
+      <form method="post" action="{{ url_for('user_reset_password', user_id=u.id) }}">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-key me-2"></i>重置密码</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-3">
+            为 <strong>{{ u.username }}</strong> 设置新密码，保存后该用户需用新密码登录。
+          </p>
+          <label class="form-label" for="pw{{ u.id }}">新密码</label>
+          <input type="password" class="form-control" id="pw{{ u.id }}" name="password"
+                 required placeholder="输入新密码">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+{% endfor %}
 {% endblock %}
