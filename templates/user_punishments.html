@@ -23,7 +23,7 @@
 <div class="card mb-4">
   <div class="card-header"><i class="bi bi-journal-plus me-1 text-primary"></i>执行处罚</div>
   <div class="card-body">
-    <form method="post" action="{{ url_for('user_punish', user_id=user.id) }}" class="row g-3 align-items-end">
+    <form method="post" action="{{ url_for('user_punish', user_id=user.id) }}" class="row g-3 align-items-end">{{ csrf_input }}
       <div class="col-md-3">
         <label class="form-label">类型</label>
         <select class="form-select" name="type" id="punishType">

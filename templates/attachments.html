@@ -34,7 +34,7 @@
           <td class="text-muted">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
           <td class="text-end">
             <form method="post" action="{{ url_for('attachment_delete', attachment_id=a.id) }}" class="d-inline"
-                  onsubmit="return confirm('确认删除附件 #{{ a.id }}?')">
+                  onsubmit="return confirm('确认删除附件 #{{ a.id }}?')">{{ csrf_input }}
               <button class="btn btn-sm btn-outline-danger" type="submit" title="删除">
                 <i class="bi bi-trash"></i>
               </button>

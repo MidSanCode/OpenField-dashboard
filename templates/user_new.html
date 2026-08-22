@@ -4,7 +4,7 @@
 <div style="max-width: 520px;">
   <h2 class="page-title"><i class="bi bi-person-plus me-2 text-primary"></i>新建用户</h2>
   <div class="card p-4">
-    <form method="post">
+    <form method="post">{{ csrf_input }}
       <div class="mb-3">
         <label class="form-label" for="username">用户名 <span class="text-danger">*</span></label>
         <input type="text" class="form-control" id="username" name="username" required placeholder="登录用, 唯一">

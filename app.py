@@ -1,7 +1,11 @@
 import functools
 import io
 import os
+import secrets
 import tempfile
+import threading
+import time
+import urllib.parse
 import uuid
 import datetime
 
@@ -28,6 +32,8 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = config.SECRET_KEY
 app.config["SESSION_COOKIE_NAME"] = config.SESSION_COOKIE_NAME
 app.config["SESSION_COOKIE_HTTPONLY"] = config.SESSION_COOKIE_HTTPONLY
+app.config["SESSION_COOKIE_SAMESITE"] = config.SESSION_COOKIE_SAMESITE
+app.config["SESSION_COOKIE_SECURE"] = config.SESSION_COOKIE_SECURE
 
 # Ensure the admin account table exists, but never let a database outage stop
 # the panel from booting.
@@ -35,6 +41,58 @@ try:
     db.init_admin_table()
 except Exception as e:
     app.logger.error("failed to initialize admin table at startup: %s", e)
+
+
+# ---------- CSRF protection ----------
+
+def _ensure_csrf_token():
+    """Return the per-session CSRF token, minting one on first use."""
+    token = session.get("_csrf_token")
+    if not token:
+        token = secrets.token_urlsafe(32)
+        session["_csrf_token"] = token
+    return token
+
+
+@app.context_processor
+def inject_csrf():
+    # csrf_input expands to the hidden field every POST form must include;
+    # templates were updated in bulk to append it right after their <form> tag.
+    def csrf_input():
+        return f'<input type="hidden" name="csrf_token" value="{_ensure_csrf_token()}">'
+    return {"csrf_input": csrf_input, "csrf_token": _ensure_csrf_token()}
+
+
+@app.before_request
+def csrf_protect():
+    if request.method not in ("POST", "PUT", "PATCH", "DELETE"):
+        return None
+
+    # Defense in depth 1: same-origin enforcement. A browser always sends
+    # Origin (fetch/XHR and cross-site form posts) or at least Referer; a
+    # mismatch proves the request was forged elsewhere.
+    origin = request.headers.get("Origin", "")
+    referer = request.headers.get("Referer", "")
+    host = request.host
+    for header_value in (origin, referer):
+        if not header_value:
+            continue
+        parsed_host = urllib.parse.urlsplit(header_value).netloc
+        if parsed_host and parsed_host != host:
+            app.logger.warning(
+                "blocked cross-origin %s from %s (host %s)",
+                request.path, parsed_host, host,
+            )
+            abort(400)
+
+    # Defense in depth 2: explicit per-session token. Blocks forged requests
+    # even from clients that strip Origin/Referer.
+    sent = request.form.get("csrf_token") or request.headers.get("X-CSRF-Token")
+    expected = session.get("_csrf_token")
+    if not expected or not sent or not secrets.compare_digest(sent, expected):
+        app.logger.warning("blocked missing/invalid CSRF token for %s", request.path)
+        abort(400)
+    return None
 
 
 # ---------- initialization ----------
@@ -91,6 +149,35 @@ def login_required(view):
     return wrapped
 
 
+# ---------- login rate limiting ----------
+
+_login_attempts_lock = threading.Lock()
+_login_attempts = {}  # key -> list of failed-attempt timestamps
+_LOGIN_WINDOW_SECONDS = 15 * 60
+_LOGIN_MAX_FAILURES = 5
+
+
+def _login_blocked(key):
+    now = time.monotonic()
+    with _login_attempts_lock:
+        stamps = [t for t in _login_attempts.get(key, []) if now - t < _LOGIN_WINDOW_SECONDS]
+        _login_attempts[key] = stamps
+        return len(stamps) >= _LOGIN_MAX_FAILURES
+
+
+def _login_record_failure(key):
+    now = time.monotonic()
+    with _login_attempts_lock:
+        stamps = [t for t in _login_attempts.get(key, []) if now - t < _LOGIN_WINDOW_SECONDS]
+        stamps.append(now)
+        _login_attempts[key] = stamps
+
+
+def _login_reset(key):
+    with _login_attempts_lock:
+        _login_attempts.pop(key, None)
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if session.get("admin_id") is not None:
@@ -98,6 +185,11 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
+        # Throttle online password guessing per source IP + username.
+        attempt_key = request.remote_addr or "?" + "|" + username.lower()
+        if _login_blocked(attempt_key):
+            flash("尝试次数过多，请稍后再试。", "error")
+            return render_template("login.html"), 429
         admin = db.fetch_one(
             "SELECT id, username, password_hash FROM admin_accounts WHERE username = %s",
             (username,),
@@ -105,9 +197,12 @@ def login():
         if admin and bcrypt.checkpw(
             password.encode("utf-8"), admin["password_hash"].encode("utf-8")
         ):
+            _login_reset(attempt_key)
+            session.clear()  # rotate the session id on login (fixation defense)
             session["admin_id"] = admin["id"]
             session["admin_username"] = admin["username"]
             return redirect(url_for("dashboard"))
+        _login_record_failure(attempt_key)
         flash("Invalid username or password.", "error")
     return render_template("login.html")
 

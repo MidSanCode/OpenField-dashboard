@@ -12,7 +12,7 @@
 <div class="modal fade" id="newGroupModal" tabindex="-1" aria-hidden="true">
   <div class="modal-dialog modal-dialog-centered">
     <div class="modal-content text-start">
-      <form method="post" action="{{ url_for('group_create') }}">
+      <form method="post" action="{{ url_for('group_create') }}">{{ csrf_input }}
         <div class="modal-header">
           <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>新建权限组</h5>
           <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
@@ -48,7 +48,7 @@
     <div class="ms-auto d-inline-flex gap-1">
       {% if not g.is_default %}
       <form method="post" action="{{ url_for('group_delete', group_id=g.id) }}"
-            onsubmit="return confirm('确认删除权限组 {{ g.name }}? 组内成员的权限将随之移除。')">
+            onsubmit="return confirm('确认删除权限组 {{ g.name }}? 组内成员的权限将随之移除。')">{{ csrf_input }}
         <button class="btn btn-sm btn-outline-danger" type="submit">
           <i class="bi bi-trash me-1"></i>删除
         </button>
@@ -62,7 +62,7 @@
     <div class="row g-4">
       <div class="col-lg-7">
         <h6 class="mb-2"><i class="bi bi-ui-checks me-1"></i>权限</h6>
-        <form method="post" action="{{ url_for('group_permissions', group_id=g.id) }}">
+        <form method="post" action="{{ url_for('group_permissions', group_id=g.id) }}">{{ csrf_input }}
           <div class="border rounded-3 p-3" style="max-height: 420px; overflow-y: auto;">
             <div class="row g-2">
               {% for p in perms %}
@@ -102,7 +102,7 @@
               {% if g.is_default %}
               <span class="badge text-bg-info">默认</span>
               {% else %}
-              <form method="post" action="{{ url_for('group_member_remove', group_id=g.id) }}" class="d-inline">
+              <form method="post" action="{{ url_for('group_member_remove', group_id=g.id) }}" class="d-inline">{{ csrf_input }}
                 <input type="hidden" name="user_id" value="{{ uid }}">
                 <button class="btn btn-sm btn-outline-danger" type="submit" title="移出该组">
                   <i class="bi bi-person-dash"></i>
@@ -117,7 +117,7 @@
           {% endif %}
 
           <hr class="my-3">
-          <form method="post" action="{{ url_for('group_member_add', group_id=g.id) }}" class="d-flex gap-1">
+          <form method="post" action="{{ url_for('group_member_add', group_id=g.id) }}" class="d-flex gap-1">{{ csrf_input }}
             <select name="user_id" class="form-select form-select-sm" required>
               <option value="">选择用户…</option>
               {% for u in all_users %}

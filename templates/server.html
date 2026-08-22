@@ -10,7 +10,7 @@
       指向 OpenField Go 服务端仓库根目录（包含 <code>services/</code> 与 <code>bin/</code> 的目录）。
       服务端可执行文件构建到 <code>bin/</code>，日志写入 <code>logs/</code>。
     </p>
-    <form method="post" action="{{ url_for('server_config') }}" class="d-flex gap-2 align-items-start">
+    <form method="post" action="{{ url_for('server_config') }}" class="d-flex gap-2 align-items-start">{{ csrf_input }}
       <div class="flex-grow-1">
         <input
           type="text"
@@ -30,12 +30,12 @@
 <div class="card">
   <div class="card-header d-flex align-items-center gap-2 bg-white">
     <h5 class="fw-bold mb-0"><i class="bi bi-diagram-3 me-2"></i>服务</h5>
-    <form method="post" action="{{ url_for('server_start_all') }}" class="ms-auto">
+    <form method="post" action="{{ url_for('server_start_all') }}" class="ms-auto">{{ csrf_input }}
       <button class="btn btn-sm btn-success" type="submit">
         <i class="bi bi-play-fill me-1"></i>全部启动
       </button>
     </form>
-    <form method="post" action="{{ url_for('server_stop_all') }}">
+    <form method="post" action="{{ url_for('server_stop_all') }}">{{ csrf_input }}
       <button class="btn btn-sm btn-danger" type="submit">
         <i class="bi bi-stop-fill me-1"></i>全部停止
       </button>
@@ -76,19 +76,19 @@
           </td>
           <td>
             <div class="d-flex gap-2">
-              <form method="post" action="{{ url_for('server_build', service_name=svc.name) }}">
+              <form method="post" action="{{ url_for('server_build', service_name=svc.name) }}">{{ csrf_input }}
                 <button class="btn btn-sm btn-outline-primary" type="submit">
                   <i class="bi bi-hammer me-1"></i>构建
                 </button>
               </form>
               {% if svc.running %}
-              <form method="post" action="{{ url_for('server_stop', service_name=svc.name) }}">
+              <form method="post" action="{{ url_for('server_stop', service_name=svc.name) }}">{{ csrf_input }}
                 <button class="btn btn-sm btn-danger" type="submit">
                   <i class="bi bi-stop-fill me-1"></i>停止
                 </button>
               </form>
               {% else %}
-              <form method="post" action="{{ url_for('server_start', service_name=svc.name) }}">
+              <form method="post" action="{{ url_for('server_start', service_name=svc.name) }}">{{ csrf_input }}
                 <button class="btn btn-sm btn-success" type="submit">
                   <i class="bi bi-play-fill me-1"></i>启动
                 </button>

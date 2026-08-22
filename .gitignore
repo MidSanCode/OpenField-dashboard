@@ -5,3 +5,4 @@ venv/
 .env
 server_config.json
 backups/
+.secret_key

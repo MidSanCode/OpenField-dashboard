@@ -32,7 +32,7 @@
         {% endif %}
         <div class="mt-auto">
           {% if not db_status.ok %}
-          <form method="post" action="{{ url_for('db_init') }}">
+          <form method="post" action="{{ url_for('db_init') }}">{{ csrf_input }}
             <button class="btn btn-primary w-100" type="submit">
               <i class="bi bi-database-fill-up me-1"></i>初始化 / 修复数据库
             </button>
@@ -57,7 +57,7 @@
           使用 <code>pg_dump --clean --if-exists</code> 导出当前数据库为
           <code>.sql</code> 文件，保存到 <code>admin/backups/</code>，可直接用于本页导入恢复。
         </p>
-        <form method="post" action="{{ url_for('db_export') }}">
+        <form method="post" action="{{ url_for('db_export') }}">{{ csrf_input }}
           <button class="btn btn-success" type="submit">
             <i class="bi bi-cloud-arrow-down me-1"></i>立即备份
           </button>
@@ -76,7 +76,7 @@
       从本面板导出的 <code>.sql</code> 备份恢复到当前数据库。导入会在单个事务中执行，
       任何一步失败都会整体回滚。导入将<b>覆盖</b>当前数据库中的数据。
     </p>
-    <form method="post" action="{{ url_for('db_import') }}" enctype="multipart/form-data" class="d-flex flex-column gap-2">
+    <form method="post" action="{{ url_for('db_import') }}" enctype="multipart/form-data" class="d-flex flex-column gap-2">{{ csrf_input }}
       <div class="d-flex gap-2 align-items-center">
         <input type="file" name="file" accept=".sql" class="form-control flex-grow-1" required>
         <button class="btn btn-warning" type="submit">
@@ -121,7 +121,7 @@
                 <i class="bi bi-download me-1"></i>下载
               </a>
               <form method="post" action="{{ url_for('db_backup_delete', filename=b.name) }}"
-                    onsubmit="return confirm('确认删除备份 {{ b.name }} 吗？');">
+                    onsubmit="return confirm('确认删除备份 {{ b.name }} 吗？');">{{ csrf_input }}
                 <button class="btn btn-sm btn-outline-danger" type="submit">
                   <i class="bi bi-trash me-1"></i>删除
                 </button>

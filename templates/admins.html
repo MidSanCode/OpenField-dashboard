@@ -20,7 +20,7 @@
           <td class="text-muted">{{ a.id }}</td>
           <td class="fw-medium">{{ a.username }}</td>
           <td>
-                <form method="post" action="{{ url_for('admin_can_verify', admin_id=a.id) }}" class="d-inline">
+                <form method="post" action="{{ url_for('admin_can_verify', admin_id=a.id) }}" class="d-inline">{{ csrf_input }}
               <div class="form-check form-switch m-0">
                 <input type="hidden" name="can_verify" value="0">
                 <input type="checkbox" class="form-check-input" name="can_verify" value="1"
