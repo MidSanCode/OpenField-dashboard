@@ -961,6 +961,25 @@ def user_reset_password(user_id):
     return redirect(url_for("users"))
 
 
+@app.route("/users/<int:user_id>/reset-pin", methods=["POST"])
+@login_required
+def user_reset_pin(user_id):
+    user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
+    pin = (request.form.get("pin") or "").strip()
+    if not (pin.isdigit() and len(pin) == 6):
+        flash("支付PIN必须是6位数字。", "error")
+        return redirect(url_for("users"))
+    pin_hash = bcrypt.hashpw(pin.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    db.execute(
+        "UPDATE users SET pin_hash = %s, updated_at = NOW() WHERE id = %s",
+        (pin_hash, user_id),
+    )
+    flash(f"已重置 '{user['username']}' 的支付PIN。", "success")
+    return redirect(url_for("users"))
+
+
 @app.route("/users/<int:user_id>/delete", methods=["POST"])
 @login_required
 def user_delete(user_id):

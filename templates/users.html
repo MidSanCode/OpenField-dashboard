@@ -134,6 +134,11 @@
                     </a>
                   </li>
                   <li>
+                    <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#resetPin{{ u.id }}">
+                      <i class="bi bi-123 me-2 text-primary"></i>重置支付PIN
+                    </a>
+                  </li>
+                  <li>
                     <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}"
                           onsubmit="return confirm('确认删除用户 {{ u.username }}? 其帖子与消息将一并删除。')">{{ csrf_input }}
                       <button class="dropdown-item text-danger" type="submit">
@@ -299,6 +304,32 @@
           <label class="form-label" for="pw{{ u.id }}">新密码</label>
           <input type="password" class="form-control" id="pw{{ u.id }}" name="password"
                  required placeholder="输入新密码">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="resetPin{{ u.id }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content text-start">
+      <form method="post" action="{{ url_for('user_reset_pin', user_id=u.id) }}">{{ csrf_input }}
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-123 me-2"></i>重置支付PIN</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-3">
+            为 <strong>{{ u.username }}</strong> 设置新的6位数字支付PIN（用于转账、打赏、支票等支付授权），无需旧PIN。
+          </p>
+          <label class="form-label" for="newpin{{ u.id }}">新支付PIN</label>
+          <input type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+                 class="form-control" id="newpin{{ u.id }}" name="pin"
+                 required placeholder="6位数字">
         </div>
         <div class="modal-footer">
           <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
