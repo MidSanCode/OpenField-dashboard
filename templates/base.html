@@ -81,6 +81,11 @@
         </a>
       </li>
       <li class="nav-item">
+        <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('plugin') }}" href="{{ url_for('plugins') }}">
+          <i class="bi bi-puzzle me-2"></i>插件商店
+        </a>
+      </li>
+      <li class="nav-item">
         <a class="nav-link {{ 'active' if request.endpoint and request.endpoint.startswith('db') }}" href="{{ url_for('db_page') }}">
           <i class="bi bi-database me-2"></i>数据库管理
         </a>

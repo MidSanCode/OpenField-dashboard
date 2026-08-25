@@ -1,6 +1,9 @@
 import functools
+import hashlib
 import io
+import json
 import os
+import re
 import secrets
 import tempfile
 import threading
@@ -8,6 +11,7 @@ import time
 import urllib.parse
 import uuid
 import datetime
+import zipfile
 
 import bcrypt
 import psycopg2
@@ -61,6 +65,18 @@ def inject_csrf():
     def csrf_input():
         return f'<input type="hidden" name="csrf_token" value="{_ensure_csrf_token()}">'
     return {"csrf_input": csrf_input, "csrf_token": _ensure_csrf_token()}
+
+
+@app.template_filter("from_json")
+def from_json(value):
+    """Parses a JSON string column (e.g. plugins.permissions) into a list."""
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+        return parsed if isinstance(parsed, list) else []
+    except (json.JSONDecodeError, TypeError):
+        return []
 
 
 @app.before_request
@@ -1205,6 +1221,171 @@ def group_delete(group_id):
     db.execute("DELETE FROM groups WHERE id = %s", (group_id,))
     flash(f"Group '{group['name']}' deleted.", "success")
     return redirect(url_for("groups"))
+
+
+# ---------- plugin store ----------
+
+PLUGIN_MAX_BYTES = 5 * 1024 * 1024  # must match the Go service cap
+_PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
+_PLUGIN_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$")
+_PLUGIN_PERM_RE = re.compile(r"^[a-z0-9]+(?:\.[a-z0-9_]+){0,3}$")
+
+
+def _plugin_data_dir():
+    """Directory the plugin service serves bundles from."""
+    root = server_manager.load_config().get("server_root") or config.SERVER_ROOT
+    return os.path.join(root, "data", "plugins")
+
+
+def _read_bundle_manifest(file_storage):
+    """Pars manifest.json out of an uploaded zip. Returns (manifest, raw_bytes)."""
+    raw = file_storage.read()
+    if len(raw) > PLUGIN_MAX_BYTES:
+        raise ValueError(f"插件包过大（最大 {PLUGIN_MAX_BYTES // (1024*1024)} MB）")
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(raw))
+    except zipfile.BadZipFile:
+        raise ValueError("不是有效的 zip 插件包")
+    names = zf.namelist()
+    target = None
+    for n in names:
+        if n.strip("./").lower() == "manifest.json" or n.lower() == "manifest.json":
+            target = n
+            break
+    if not target:
+        raise ValueError("插件包缺少根目录 manifest.json")
+    try:
+        mf = json.loads(zf.read(target).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise ValueError("manifest.json 不是有效的 UTF-8 JSON")
+    if not isinstance(mf, dict):
+        raise ValueError("manifest.json 必须是 JSON 对象")
+
+    pid = str(mf.get("id", ""))
+    version = str(mf.get("version", ""))
+    entry = str(mf.get("entry") or "main.js")
+    perms = mf.get("permissions", [])
+    if not _PLUGIN_ID_RE.match(pid):
+        raise ValueError(f"无效插件 id: {pid!r}（小写字母/数字/点/横线，3-64 位）")
+    if not str(mf.get("name", "")).strip():
+        raise ValueError("manifest.name 不能为空")
+    if not _PLUGIN_VERSION_RE.match(version):
+        raise ValueError(f"无效版本号: {version!r}（应为 1.0.0 形式）")
+    if "/" in entry or "\\" in entry or ".." in entry or not entry.endswith(".js"):
+        raise ValueError("manifest.entry 必须是纯 .js 文件名")
+    if not isinstance(perms, list) or any(
+        not isinstance(p, str) or not _PLUGIN_PERM_RE.match(p) for p in perms
+    ):
+        raise ValueError("manifest.permissions 必须是权限字符串数组")
+    # Entry script must exist inside the bundle.
+    entry_names = {n.strip("./").lower() for n in names}
+    if entry.lower() not in entry_names:
+        raise ValueError(f"入口脚本 {entry} 不在插件包中")
+    return {
+        "id": pid,
+        "name": str(mf.get("name")).strip(),
+        "version": version,
+        "author": str(mf.get("author", "")),
+        "description": str(mf.get("description", "")),
+        "entry": entry,
+        "permissions": [str(p) for p in perms],
+        "min_app_version": str(mf.get("min_app_version", "")),
+    }, raw
+
+
+@app.route("/plugins")
+@login_required
+def plugins():
+    rows = db.fetch_all("SELECT * FROM plugins ORDER BY updated_at DESC LIMIT 500")
+    return render_template("plugins.html", plugins=rows)
+
+
+@app.route("/plugins/upload", methods=["POST"])
+@login_required
+def plugin_upload():
+    file = request.files.get("file")
+    if not file or not file.filename:
+        flash("请选择要上传的插件 zip 包。", "error")
+        return redirect(url_for("plugins"))
+    publish = request.form.get("publish") == "on"
+    try:
+        mf, raw = _read_bundle_manifest(file)
+    except ValueError as e:
+        flash(str(e), "error")
+        return redirect(url_for("plugins"))
+
+    sha = hashlib.sha256(raw).hexdigest()
+    data_dir = _plugin_data_dir()
+    os.makedirs(data_dir, exist_ok=True)
+    dst = os.path.join(data_dir, f"{mf['id']}-{mf['version']}.zip")
+    with open(dst, "wb") as f:
+        f.write(raw)
+
+    db.execute(
+        """
+        INSERT INTO plugins (id, name, version, author, description, permissions,
+            min_app_version, entry, file_path, file_size, sha256, verified, published)
+        VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,TRUE,%s)
+        ON CONFLICT (id) DO UPDATE SET
+            name=EXCLUDED.name, version=EXCLUDED.version, author=EXCLUDED.author,
+            description=EXCLUDED.description, permissions=EXCLUDED.permissions,
+            min_app_version=EXCLUDED.min_app_version, entry=EXCLUDED.entry,
+            file_path=EXCLUDED.file_path, file_size=EXCLUDED.file_size,
+            sha256=EXCLUDED.sha256, verified=TRUE, published=EXCLUDED.published,
+            updated_at=NOW()
+        """,
+        (
+            mf["id"], mf["name"], mf["version"], mf["author"], mf["description"],
+            json.dumps(mf["permissions"]), mf["min_app_version"], mf["entry"],
+            dst, len(raw), sha, publish,
+        ),
+    )
+    flash(f"插件 {mf['name']} v{mf['version']} 已上传。", "success")
+    return redirect(url_for("plugins"))
+
+
+@app.route("/plugins/<plugin_id>/publish", methods=["POST"])
+@login_required
+def plugin_publish(plugin_id):
+    row = db.fetch_one("SELECT id FROM plugins WHERE id = %s", (plugin_id,))
+    if not row:
+        abort(404)
+    db.execute(
+        "UPDATE plugins SET published = TRUE, updated_at = NOW() WHERE id = %s",
+        (plugin_id,),
+    )
+    flash("插件已上架。", "success")
+    return redirect(url_for("plugins"))
+
+
+@app.route("/plugins/<plugin_id>/unpublish", methods=["POST"])
+@login_required
+def plugin_unpublish(plugin_id):
+    row = db.fetch_one("SELECT id FROM plugins WHERE id = %s", (plugin_id,))
+    if not row:
+        abort(404)
+    db.execute(
+        "UPDATE plugins SET published = FALSE, updated_at = NOW() WHERE id = %s",
+        (plugin_id,),
+    )
+    flash("插件已下架，客户端商店不再展示。", "success")
+    return redirect(url_for("plugins"))
+
+
+@app.route("/plugins/<plugin_id>/delete", methods=["POST"])
+@login_required
+def plugin_delete(plugin_id):
+    row = db.fetch_one("SELECT id, file_path FROM plugins WHERE id = %s", (plugin_id,))
+    if not row:
+        abort(404)
+    db.execute("DELETE FROM plugins WHERE id = %s", (plugin_id,))
+    if row.get("file_path") and os.path.isfile(row["file_path"]):
+        try:
+            os.remove(row["file_path"])
+        except OSError:
+            pass
+    flash("插件已删除。", "success")
+    return redirect(url_for("plugins"))
 
 
 if __name__ == "__main__":

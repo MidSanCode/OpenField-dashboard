@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}插件商店{% endblock %}
+{% block content %}
+<h2 class="page-title"><i class="bi bi-puzzle me-2 text-primary"></i>插件商店</h2>
+
+<div class="card table-card mb-4">
+  <div class="card-body">
+    <h3 class="h6 fw-bold mb-3"><i class="bi bi-cloud-arrow-up me-2"></i>上传插件</h3>
+    <p class="text-muted small mb-3">
+      上传包含 <code>manifest.json</code> 与入口 JS 脚本的 zip 插件包（≤5MB）。
+      manifest 示例：
+      <code>{"id":"com.example.demo","name":"示例插件","version":"1.0.0","entry":"main.js","permissions":["storage","http.fetch"]}</code>
+    </p>
+    <form method="post" action="{{ url_for('plugin_upload') }}" enctype="multipart/form-data"
+          class="row g-2 align-items-center">
+      {{ csrf_input }}
+      <div class="col-auto flex-grow-1">
+        <input type="file" class="form-control" name="file" accept=".zip" required>
+      </div>
+      <div class="col-auto form-check ms-2">
+        <input class="form-check-input" type="checkbox" name="publish" id="publishCheck">
+        <label class="form-check-label small" for="publishCheck">上传后立即上架</label>
+      </div>
+      <div class="col-auto">
+        <button class="btn btn-primary" type="submit"><i class="bi bi-upload me-1"></i>上传</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card table-card">
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>插件</th><th>版本</th><th>作者</th><th>权限</th><th>状态</th><th>下载量</th><th>更新时间</th><th class="text-end">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in plugins %}
+        <tr>
+          <td>
+            <div class="fw-medium">{{ p.name }}</div>
+            <div class="text-muted small">{{ p.id }}</div>
+            {% if p.description %}<div class="text-muted small text-truncate" style="max-width:320px">{{ p.description }}</div>{% endif %}
+          </td>
+          <td><span class="badge text-bg-light">v{{ p.version }}</span></td>
+          <td>{{ p.author or '—' }}</td>
+          <td style="max-width:220px">
+            {% for perm in (p.permissions | from_json) %}
+              <span class="badge badge-soft-user me-1">{{ perm }}</span>
+            {% else %}
+              <span class="text-muted small">无</span>
+            {% endfor %}
+          </td>
+          <td>
+            {% if p.published %}
+              <span class="badge badge-soft-admin">已上架</span>
+            {% else %}
+              <span class="badge badge-soft-pending">未上架</span>
+            {% endif %}
+            {% if p.verified %}<span class="badge badge-soft-admin mt-1"><i class="bi bi-patch-check me-1"></i>官方</span>{% endif %}
+          </td>
+          <td>{{ p.downloads }}</td>
+          <td class="text-muted">{{ p.updated_at.strftime('%Y-%m-%d %H:%M') if p.updated_at }}</td>
+          <td class="text-end">
+            {% if p.published %}
+            <form method="post" action="{{ url_for('plugin_unpublish', plugin_id=p.id) }}" class="d-inline">{{ csrf_input }}
+              <button class="btn btn-sm btn-outline-secondary" type="submit" title="下架"><i class="bi bi-eye-slash"></i></button>
+            </form>
+            {% else %}
+            <form method="post" action="{{ url_for('plugin_publish', plugin_id=p.id) }}" class="d-inline">{{ csrf_input }}
+              <button class="btn btn-sm btn-outline-success" type="submit" title="上架"><i class="bi bi-eye"></i></button>
+            </form>
+            {% endif %}
+            <form method="post" action="{{ url_for('plugin_delete', plugin_id=p.id) }}" class="d-inline"
+                  onsubmit="return confirm('确认删除插件 {{ p.id }}？客户端已安装的副本不受影响。')">{{ csrf_input }}
+              <button class="btn btn-sm btn-outline-danger" type="submit" title="删除"><i class="bi bi-trash"></i></button>
+            </form>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="8" class="text-center text-muted py-4">还没有插件，先上传一个吧</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

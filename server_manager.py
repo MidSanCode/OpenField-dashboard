@@ -29,6 +29,7 @@ SERVICES = {
     "chat": {"exe": "openfield-chat", "dir": "chat"},
     "posts": {"exe": "openfield-posts", "dir": "posts"},
     "push": {"exe": "openfield-push", "dir": "push"},
+    "plugin": {"exe": "openfield-plugin", "dir": "plugin"},
 }
 
 # Keep references to open log files so they aren't garbage collected.
