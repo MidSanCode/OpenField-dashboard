@@ -15,6 +15,7 @@ import zipfile
 
 import bcrypt
 import psycopg2
+from markupsafe import Markup
 from flask import (
     Flask,
     abort,
@@ -60,11 +61,14 @@ def _ensure_csrf_token():
 
 @app.context_processor
 def inject_csrf():
-    # csrf_input expands to the hidden field every POST form must include;
-    # templates were updated in bulk to append it right after their <form> tag.
-    def csrf_input():
-        return f'<input type="hidden" name="csrf_token" value="{_ensure_csrf_token()}">'
-    return {"csrf_input": csrf_input, "csrf_token": _ensure_csrf_token()}
+    # csrf_input expands to the hidden field every POST form must include.
+    # Templates reference it as {{ csrf_input }} without call parentheses, so
+    # it must be a pre-rendered Markup string: a bare callable renders as its
+    # repr, the hidden field never appears and every POST fails CSRF checks.
+    csrf_field = Markup(
+        f'<input type="hidden" name="csrf_token" value="{_ensure_csrf_token()}">'
+    )
+    return {"csrf_input": csrf_field, "csrf_token": _ensure_csrf_token()}
 
 
 @app.template_filter("from_json")
@@ -1389,4 +1393,4 @@ def plugin_delete(plugin_id):
 
 
 if __name__ == "__main__":
-    app.run(host="127.0.0.1", port=5001, debug=False)
+    app.run(host="127.0.0.1", port=1343, debug=False)
