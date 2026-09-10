@@ -981,6 +981,34 @@ def user_reset_password(user_id):
     return redirect(url_for("users"))
 
 
+USERNAME_RE = re.compile(r"^[a-z0-9_]{3,32}$")
+
+
+@app.route("/users/<int:user_id>/rename", methods=["POST"])
+@login_required
+def user_rename(user_id):
+    """Change a user's username (the only rename path: registration sets it
+    once and clients cannot rename themselves). Enforces the same rule as
+    registration: 3-32 lowercase letters, digits or underscores."""
+    user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
+    if not user:
+        abort(404)
+    username = (request.form.get("username") or "").strip()
+    if not USERNAME_RE.match(username):
+        flash("用户名只能包含 3-32 个小写字母、数字或下划线。", "error")
+        return redirect(url_for("users"))
+    existing = db.fetch_one("SELECT id FROM users WHERE username = %s AND id <> %s", (username, user_id))
+    if existing:
+        flash(f"用户名 '{username}' 已被占用。", "error")
+        return redirect(url_for("users"))
+    db.execute(
+        "UPDATE users SET username = %s, updated_at = NOW() WHERE id = %s",
+        (username, user_id),
+    )
+    flash(f"已将 '{user['username']}' 的用户名改为 '{username}'。", "success")
+    return redirect(url_for("users"))
+
+
 @app.route("/users/<int:user_id>/reset-pin", methods=["POST"])
 @login_required
 def user_reset_pin(user_id):

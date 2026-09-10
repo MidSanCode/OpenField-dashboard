@@ -129,6 +129,11 @@
                   {% endif %}
                   <li><hr class="dropdown-divider"></li>
                   <li>
+                    <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#renameUser{{ u.id }}">
+                      <i class="bi bi-pencil-square me-2 text-primary"></i>修改用户名
+                    </a>
+                  </li>
+                  <li>
                     <a class="dropdown-item" href="#" data-bs-toggle="modal" data-bs-target="#resetPw{{ u.id }}">
                       <i class="bi bi-key me-2 text-primary"></i>重置密码
                     </a>
@@ -339,5 +344,31 @@
     </div>
   </div>
 </div>
+<div class="modal fade" id="renameUser{{ u.id }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content text-start">
+      <form method="post" action="{{ url_for('user_rename', user_id=u.id) }}">{{ csrf_input }}
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-pencil-square me-2"></i>修改用户名</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+        </div>
+        <div class="modal-body">
+          <p class="text-muted small mb-3">
+            用户名是账号的唯一标识，用户注册后不能自行修改。仅允许 3-32 个小写字母、数字或下划线。
+          </p>
+          <label class="form-label" for="newname{{ u.id }}">新用户名</label>
+          <input type="text" pattern="[a-z0-9_]{3,32}" maxlength="32"
+                 class="form-control" id="newname{{ u.id }}" name="username"
+                 required placeholder="小写字母 / 数字 / 下划线">
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">取消</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-check-lg me-1"></i>保存</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
 {% endfor %}
 {% endblock %}
