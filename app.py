@@ -423,12 +423,22 @@ def db_backup_delete(filename):
 def server_config():
     cfg = server_manager.load_config()
     new_root = request.form.get("server_root", "").strip()
-    if new_root:
-        cfg["server_root"] = new_root.rstrip("\\/")
-        server_manager.save_config(cfg)
-        flash(f"服务器根目录已设置为: {cfg['server_root']}", "success")
-    else:
+    if not new_root:
         flash("服务器根目录不能为空。", "error")
+        return redirect(url_for("server_page"))
+
+    # server_root decides which binaries the panel later executes
+    # (<root>/bin/openfield-*) and where `go build` runs, so an unchecked
+    # value is a direct path from a panel account to running an arbitrary
+    # program: point it at any directory containing bin/openfield-gateway and
+    # press start. Confine it to the configured base directory instead.
+    ok, result = server_manager.validate_server_root(new_root)
+    if not ok:
+        flash(f"服务器根目录无效: {result}", "error")
+        return redirect(url_for("server_page"))
+    cfg["server_root"] = result
+    server_manager.save_config(cfg)
+    flash(f"服务器根目录已设置为: {result}", "success")
     return redirect(url_for("server_page"))
 
 

@@ -75,6 +75,43 @@ def bin_dir(root):
     return os.path.join(root, "bin")
 
 
+def _is_within(base, candidate):
+    """Report whether candidate is base itself or lives inside it."""
+    return candidate == base or candidate.startswith(base + os.sep)
+
+
+def validate_server_root(new_root):
+    """Validate an operator-supplied server_root.
+
+    The value selects which directory the panel executes binaries from
+    (<root>/bin/openfield-<service>) and where `go build` runs, so it must be
+    confined to a directory the panel already trusts. Returns (True, realpath)
+    on success and (False, reason) on rejection.
+
+    Confinement is by realpath, so symlinks and ".." cannot escape, and the
+    base itself (config.SERVER_ROOT) is always accepted.
+    """
+    if not new_root or not new_root.strip():
+        return False, "路径不能为空"
+
+    try:
+        real = os.path.realpath(os.path.abspath(new_root.strip()))
+    except (OSError, ValueError) as e:
+        return False, f"无法解析路径（{e}）"
+
+    if not os.path.isdir(real):
+        return False, "目录不存在或不可访问"
+
+    # Accept the configured base directory or anything beneath it. An
+    # operator who needs a different tree must set ADMIN_SERVER_ROOT, which is
+    # an out-of-band deployment decision rather than a web form field.
+    base = os.path.realpath(os.path.abspath(config.SERVER_ROOT))
+    if _is_within(base, real):
+        return True, real
+
+    return False, f"必须是受控基准目录 {base} 或其子目录"
+
+
 def service_exe_name(name):
     """Built binary file name for a service (with platform-appropriate suffix)."""
     return SERVICES[name]["exe"] + _exe_suffix()
@@ -129,6 +166,15 @@ def start_service(cfg, name):
     exe_path = service_exe_path(root, name)
     if not os.path.isfile(exe_path):
         return False, f"未找到可执行文件: {exe_path}"
+
+    # Re-validate at execution time: the config file can be edited by hand or
+    # left over from an older version, and this is the point where a bad root
+    # turns into code execution.
+    ok, validated = validate_server_root(root)
+    if not ok:
+        return False, f"服务器根目录无效: {validated}"
+    root = validated
+    exe_path = service_exe_path(root, name)
 
     logs_dir = os.path.join(root, "logs")
     os.makedirs(logs_dir, exist_ok=True)
