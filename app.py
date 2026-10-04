@@ -187,6 +187,15 @@ USERNAME_RE = re.compile(r"^[a-z0-9_]{3,32}$")
 # that can never verify. Defined once, here, rather than re-declared mid-module.
 PIN_RE = re.compile(r"^[0-9]{6}$")
 
+# A valid bcrypt hash of a random value that no submitted password will match.
+# Comparing against this when the account does not exist keeps the login
+# handler's cost constant, so response timing cannot reveal which usernames are
+# real (see the login route). Generated once at import; the plaintext is
+# discarded, so this can never authenticate anything.
+_DUMMY_PASSWORD_HASH = bcrypt.hashpw(
+    secrets.token_bytes(32), bcrypt.gensalt()
+).decode("utf-8")
+
 ALL_CAPABILITIES = (
     CAP_USERS_CREDENTIALS,
     CAP_USERS_WRITE,
@@ -624,9 +633,19 @@ def login():
             "FROM admin_accounts WHERE username = %s",
             (username,),
         )
-        if admin and not admin.get("disabled") and bcrypt.checkpw(
-            password.encode("utf-8"), admin["password_hash"].encode("utf-8")
-        ):
+        # Always run the bcrypt comparison, even when the username does not
+        # exist. A chain like the original short-circuits: an unknown username
+        # returned before hashing, so a failed login for a real account took
+        # ~100ms while one for a nonexistent account took ~1ms. That gap is
+        # measurable over the network and turns the login form into a username
+        # oracle, telling an attacker which administrative account names are
+        # real before spending any effort on passwords. Compare against a fixed
+        # dummy hash so the work is constant either way.
+        candidate_hash = admin["password_hash"] if admin else _DUMMY_PASSWORD_HASH
+        password_ok = bcrypt.checkpw(
+            password.encode("utf-8"), candidate_hash.encode("utf-8")
+        )
+        if admin and not admin.get("disabled") and password_ok:
             _login_reset(attempt_key)
             session.clear()  # rotate the session id on login (fixation defense)
             session["admin_id"] = admin["id"]
@@ -636,6 +655,8 @@ def login():
             session["session_version"] = admin["session_version"]
             return redirect(url_for("dashboard"))
         _login_record_failure(attempt_key)
+        # One message for every failure, so the response does not distinguish
+        # "no such user" from "wrong password" from "account disabled".
         flash("Invalid username or password.", "error")
     return render_template("login.html")
 
@@ -1197,20 +1218,21 @@ def user_wallet(user_id):
                     "UPDATE wallets SET balance = %s, updated_at = NOW() WHERE user_id = %s",
                     (new_balance, user_id),
                 )
-                # Link the operator to a users row when the admin account shares
-                # a username; otherwise leave operator_id NULL (the FK points to
-                # users(id)) and record the admin account name for the audit log.
-                cur.execute(
-                    "SELECT id FROM users WHERE username = %s LIMIT 1",
-                    (admin_name,),
-                )
-                op_row = cur.fetchone()
-                operator_id = op_row[0] if op_row else None
+                # Attribute the transaction to the panel account only.
+                #
+                # operator_id references users(id) — the APPLICATION user table —
+                # and a panel account is not an application user. Looking the
+                # operator up there by username produced a wrong attribution
+                # whenever a panel account shared a name with a real user (or was
+                # renamed to one): the action was recorded against that unrelated
+                # person, who then appeared to have adjusted someone's wallet.
+                # Leave the id NULL and record the panel account name, which is
+                # the only identifier that is actually true here.
                 cur.execute(
                     "INSERT INTO wallet_transactions "
                     "(user_id, amount, balance_after, type, description, operator_id, operator_username) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (user_id, amount_cents, new_balance, tx_type, description, operator_id, admin_name),
+                    "VALUES (%s, %s, %s, %s, %s, NULL, %s)",
+                    (user_id, amount_cents, new_balance, tx_type, description, admin_name),
                 )
                 conn.commit()
         finally:
