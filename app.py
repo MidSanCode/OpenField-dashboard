@@ -490,14 +490,10 @@ def db_import():
         if sql_text is None:
             flash("无法读取备份文件。", "error")
             return redirect(url_for("db_page"))
-        bad = db_admin.contains_meta_command(sql_text)
-        if bad is not None:
-            app.logger.warning("rejected db import containing meta-command %s", bad)
-            flash(
-                f"备份文件包含不允许的 psql 元命令 {bad}，已拒绝导入。"
-                " 请仅导入本面板导出的备份文件。",
-                "error",
-            )
+        reason = db_admin.screen_import_text(sql_text)
+        if reason is not None:
+            app.logger.warning("rejected db import: %s", reason)
+            flash(reason, "error")
             return redirect(url_for("db_page"))
         ok, msg = db_admin.import_backup(tmp_path)
         if ok:

@@ -37,6 +37,47 @@ def _restrict_file(path):
 # Largest backup file we will read or import.
 MAX_IMPORT_BYTES = 512 * 1024 * 1024
 
+# Identity tables. The restore runs as the same database role that owns these
+# tables, so a dump containing them is a universal privilege-escalation
+# primitive: `UPDATE admin_accounts SET can_verify = TRUE` re-grants an
+# account the very permission the panel just revoked, and an INSERT there
+# mints a brand-new panel administrator. A legitimate data restore has no
+# reason to rewrite the panel's own identity rows, so files referencing these
+# tables are refused outright. This holds even if the psql meta-command screen
+# is bypassed, because it works on the SQL text, not on client syntax.
+_PROTECTED_TABLES = (
+    "admin_accounts",
+    "pg_authid",
+    "pg_shadow",
+    "pg_roles",
+    "pg_auth_members",
+)
+
+# Match a table reference in the positions that actually write or read it:
+# after CREATE/ALTER/DROP TABLE, INSERT INTO, UPDATE, DELETE FROM, TRUNCATE,
+# or COPY ... FROM/TO. A plain substring search would reject an unrelated
+# column or comment mentioning the name.
+_PROTECTED_TABLE_RE = re.compile(
+    r"\b(?:create|alter|drop)\s+(?:table|index|sequence)\s+"
+    r"(?:if\s+(?:not\s+)?exists\s+)?(?:\w+\.)?\"?(" + "|".join(_PROTECTED_TABLES) + r")\"?\b"
+    r"|\btruncate\s+(?:table\s+)?(?:only\s+)?(?:\w+\.)?\"?("
+    + "|".join(_PROTECTED_TABLES)
+    + r")\"?\b"
+    r"|\b(?:insert\s+into|delete\s+from|update|copy)\s+(?:\w+\.)?\"?("
+    + "|".join(_PROTECTED_TABLES)
+    + r")\"?\b",
+    re.IGNORECASE,
+)
+
+
+def references_protected_table(sql_text):
+    """Return the identity table a dump touches, or None when it is safe."""
+    for m in _PROTECTED_TABLE_RE.finditer(sql_text):
+        for group in m.groups():
+            if group:
+                return group.lower()
+    return None
+
 # psql reads its input the same way it reads an interactive session, so a file
 # containing backslash meta-commands executes them: `\!` runs a shell command,
 # `\i` includes and runs another file, `\o` writes files, `\copy ... PROGRAM`
@@ -231,6 +272,27 @@ def export_backup():
     return out_path, f"备份完成: {os.path.basename(out_path)}（{size / 1024:.1f} KB）"
 
 
+def screen_import_text(sql_text):
+    """Screen a candidate dump. Returns None when safe, else a reason.
+
+    Combining both checks in one place means a call site cannot apply the
+    meta-command screen while forgetting the identity-table one.
+    """
+    bad = contains_meta_command(sql_text)
+    if bad is not None:
+        return (
+            f"备份文件包含不允许的 psql 元命令 {bad}，已拒绝导入。"
+            "请仅导入本面板导出的备份文件。"
+        )
+    protected = references_protected_table(sql_text)
+    if protected is not None:
+        return (
+            f"备份文件试图写入受保护的身份表 {protected}，已拒绝导入。"
+            "恢复面板账号不通过数据库导入进行。"
+        )
+    return None
+
+
 def read_import_file(sql_path):
     """Read a candidate import file for screening.
 
@@ -272,12 +334,9 @@ def import_backup(sql_path):
     except OSError as e:
         return False, f"无法读取备份文件: {e}"
 
-    bad = contains_meta_command(sql_text)
+    bad = screen_import_text(sql_text)
     if bad is not None:
-        return False, (
-            f"备份文件包含不允许的 psql 元命令 {bad}，已拒绝导入。"
-            "请仅导入本面板导出的备份文件。"
-        )
+        return False, bad
 
     cmd = [
         "psql",
