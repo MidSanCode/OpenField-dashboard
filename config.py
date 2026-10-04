@@ -105,6 +105,14 @@ SESSION_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "").lower() in ("1", "t
 # Advisory lock id used to serialize database initialization.
 DB_INIT_LOCK_ID = int(os.getenv("ADMIN_DB_INIT_LOCK_ID", "1207"))
 
+# Upper bound on any request body Flask buffers for form/file parsing.
+#
+# Flask reads the whole body into memory before a handler runs, so without a
+# ceiling a single POST could exhaust the process. The panel's own routes are all
+# small; the only legitimately large upload is a database dump, which is why the
+# default is generous. Raise ADMIN_MAX_CONTENT_LENGTH if an import needs more.
+MAX_CONTENT_LENGTH = int(os.getenv("ADMIN_MAX_CONTENT_LENGTH", str(512 * 1024 * 1024)))
+
 
 def dsn():
     """Build the libpq connection string.

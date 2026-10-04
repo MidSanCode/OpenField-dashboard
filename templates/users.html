@@ -46,7 +46,7 @@
           <td class="text-muted">{{ u.email }}</td>
           <td>
             <form method="post" action="{{ url_for('user_role', user_id=u.id) }}">{{ csrf_input }}
-              <select name="role" class="form-select form-select-sm" style="width: auto;" onchange="this.form.submit()">
+              <select name="role" class="form-select form-select-sm" style="width: auto;" data-autosubmit>
                 <option value="user" {{ 'selected' if u.role == 'user' }}>普通用户</option>
                 <option value="admin" {{ 'selected' if u.role == 'admin' }}>管理员</option>
               </select>

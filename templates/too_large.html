@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}请求过大 - OpenField Admin{% endblock %}
+{% block content %}
+<div class="card">
+  <div class="card-body text-center py-5">
+    <i class="bi bi-exclamation-octagon text-danger" style="font-size: 3rem;"></i>
+    <h2 class="page-title mt-3">请求体积过大</h2>
+    <p class="text-muted mb-3">
+      上传内容超过了面板允许的上限（{{ limit_mb }} MB）。
+    </p>
+    <p class="small text-muted">
+      如果这是数据库导入，请改用「数据库管理」页面的分块导入，或调高环境变量
+      <code>ADMIN_MAX_CONTENT_LENGTH</code>（单位：字节）后重启面板。
+    </p>
+    <a class="btn btn-primary" href="{{ url_for('dashboard') }}">
+      <i class="bi bi-arrow-left me-1"></i>返回仪表盘
+    </a>
+  </div>
+</div>
+{% endblock %}

@@ -39,6 +39,16 @@ app.config["SESSION_COOKIE_NAME"] = config.SESSION_COOKIE_NAME
 app.config["SESSION_COOKIE_HTTPONLY"] = config.SESSION_COOKIE_HTTPONLY
 app.config["SESSION_COOKIE_SAMESITE"] = config.SESSION_COOKIE_SAMESITE
 app.config["SESSION_COOKIE_SECURE"] = config.SESSION_COOKIE_SECURE
+# Cap anything that arrives through request.form / request.files.
+#
+# Flask buffers the entire body before any handler runs, so without this a
+# single POST of arbitrary size was read into memory before a route could look
+# at it, and the panel had no global ceiling at all. Importing a database dump
+# is the one legitimately large upload, so the limit is configurable and large
+# by default; the streaming chunk-upload routes in db_admin.py are unaffected
+# because they read the request stream directly rather than through Flask's
+# form parsing.
+app.config["MAX_CONTENT_LENGTH"] = config.MAX_CONTENT_LENGTH
 
 # Ensure the admin account table exists, but never let a database outage stop
 # the panel from booting.
@@ -46,6 +56,83 @@ try:
     db.init_admin_table()
 except Exception as e:
     app.logger.error("failed to initialize admin table at startup: %s", e)
+
+
+# ---------- response hardening ----------
+
+# Content-Security-Policy for the panel.
+#
+# Every panel page carries a CSRF token and every destructive action is one
+# click, so HTML escaping is the only thing standing between a stored value and
+# script running with the ability to post arbitrary privileged requests. Escaping
+# is not a guarantee — it was already bypassed once in this codebase by an inline
+# onsubmit that decoded entities before compiling as JavaScript — so a policy
+# that refuses inline script provides the defence in depth the escaping cannot.
+#
+# Scripts and styles were moved to external files under static/ precisely so no
+# 'unsafe-inline' exemption is needed. 'unsafe-inline' for style-src is a
+# deliberate, narrow concession: the templates use style="width: auto" and
+# friends for layout, and style injection is a far weaker primitive than script
+# injection. img-src allows data: and https: because avatars and banners are
+# hosted elsewhere. frame-ancestors 'none' (with X-Frame-Options for old
+# browsers) stops the panel being framed and clickjacked.
+CSP_POLICY = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: https:",
+        "font-src 'self' data:",
+        "connect-src 'self'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+        "base-uri 'self'",
+        "object-src 'none'",
+    ]
+)
+
+
+@app.after_request
+def _apply_security_headers(response):
+    """Attach transport and browser-hardening headers to every response."""
+    response.headers.setdefault("Content-Security-Policy", CSP_POLICY)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    # HSTS only over a connection that was actually secure: it is meaningless on
+    # cleartext, and the panel is routinely reached on http://127.0.0.1.
+    if _request_is_secure():
+        response.headers.setdefault(
+            "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
+        )
+    return response
+
+
+def _request_is_secure():
+    """True when the client's connection to the edge used TLS."""
+    if request.is_secure:
+        return True
+    # A TLS-terminating proxy forwards plain HTTP and signals the original
+    # scheme in this header. It is only consulted because the operator must
+    # declare trusted proxies for the panel's own address handling anyway; see
+    # _client_ip for the same reasoning.
+    return (
+        _TRUSTED_PROXY_COUNT > 0
+        and request.headers.get("X-Forwarded-Proto", "").strip().lower() == "https"
+    )
+
+
+@app.errorhandler(413)
+def _request_too_large(error):
+    """Explain an oversized upload instead of showing Flask's bare 413."""
+    limit_mb = config.MAX_CONTENT_LENGTH / (1024 * 1024)
+    return (
+        render_template(
+            "too_large.html",
+            limit_mb=f"{limit_mb:.0f}",
+        ),
+        413,
+    )
 
 
 # ---------- capabilities ----------
