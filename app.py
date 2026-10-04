@@ -2,6 +2,7 @@ import functools
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import secrets
@@ -506,6 +507,24 @@ def _is_usable_password_hash(value):
     return bool(re.match(r"^\$2[aby]?\$\d{2}\$[./A-Za-z0-9]{53}$", text))
 
 
+def _finite_float(value, default=None):
+    """Parse a form number, rejecting NaN, infinity and malformed input.
+
+    float() accepts "nan" and "inf", so a try/except around it is not enough:
+    the parse succeeds and the failure moves to the later int() conversion, which
+    raises ValueError and surfaced as an unhandled HTTP 500 rather than a
+    validation message. Return None for anything not finite so callers can flash
+    a normal error.
+    """
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(parsed):
+        return default
+    return parsed
+
+
 def _audit(action, target_type="", target_id="", detail=""):
     """Record a privileged panel action in admin_audit_log.
 
@@ -613,8 +632,17 @@ def login():
     return render_template("login.html")
 
 
-@app.route("/logout")
+@app.route("/logout", methods=["POST"])
 def logout():
+    """End the session.
+
+    This was a GET, which meant any page on the internet could sign the operator
+    out with a single <img src="http://127.0.0.1:1343/logout"> while they were
+    working — and because GET is outside the CSRF method whitelist, nothing
+    checked where the request came from. Requiring POST brings it under the same
+    CSRF protection as every other state change. The nav now submits a form
+    carrying the token.
+    """
     session.clear()
     return redirect(url_for("login"))
 
@@ -1041,10 +1069,10 @@ def user_quota(user_id):
     user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
         abort(404)
-    try:
-        quota_mb = float(request.form.get("quota_mb", ""))
-    except ValueError:
-        flash("Invalid quota value.", "error")
+    raw = request.form.get("quota_mb", "")
+    quota_mb = _finite_float(raw)
+    if quota_mb is None:
+        flash("配额必须是有效的数字。", "error")
         return redirect(url_for("users"))
     if quota_mb <= 0:
         flash("Quota must be greater than 0.", "error")
@@ -1104,15 +1132,20 @@ def user_wallet(user_id):
     user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
     if not user:
         abort(404)
-    try:
-        amount = float(request.form.get("amount", ""))
-    except ValueError:
-        flash("Invalid amount value.", "error")
+    amount = _finite_float(request.form.get("amount", ""))
+    if amount is None:
+        flash("金额必须是有效的数字。", "error")
         return redirect(url_for("users"))
     if amount == 0:
         flash("Amount must not be zero.", "error")
         return redirect(url_for("users"))
     amount_cents = int(amount * 100)
+    if amount_cents == 0:
+        # A value smaller than one cent (for example 0.001) truncates to zero.
+        # Writing that produced a wallet transaction that moved nothing while the
+        # panel reported a successful adjustment.
+        flash("金额过小（最小 0.01）。", "error")
+        return redirect(url_for("users"))
     description = request.form.get("description", "").strip() or (
         "管理员充值" if amount_cents > 0 else "管理员扣款"
     )
