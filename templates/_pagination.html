@@ -1,0 +1,41 @@
+{# Shared pagination controls.
+
+   Expects `page`, `total_pages`, `total` and optionally `per_page` in the
+   template context. Renders nothing when everything fits on one page, so pages
+   without pagination can include it harmlessly.
+
+   The current query string is preserved (minus `page`) so that filters and
+   search terms survive paging. #}
+{% if total_pages is defined and total_pages > 1 %}
+<nav class="d-flex flex-wrap align-items-center gap-2 mb-3" aria-label="分页">
+  <span class="text-muted small">
+    共 {{ total }} 条{% if per_page %}，每页 {{ per_page }} 条{% endif %}
+    （第 {{ page }} / {{ total_pages }} 页）
+  </span>
+  <ul class="pagination pagination-sm mb-0 ms-auto">
+    {% set qs = request.args.to_dict() %}
+    {% set _ = qs.pop('page', None) %}
+    <li class="page-item {{ 'disabled' if page <= 1 }}">
+      <a class="page-link" href="{{ url_for(request.endpoint, page=page - 1, **qs) }}"
+         {% if page <= 1 %}tabindex="-1" aria-disabled="true"{% endif %}>
+        <i class="bi bi-chevron-left"></i>上一页
+      </a>
+    </li>
+    {% for p in page_window(page, total_pages) %}
+      {% if p is none %}
+        <li class="page-item disabled"><span class="page-link">…</span></li>
+      {% else %}
+        <li class="page-item {{ 'active' if p == page }}">
+          <a class="page-link" href="{{ url_for(request.endpoint, page=p, **qs) }}">{{ p }}</a>
+        </li>
+      {% endif %}
+    {% endfor %}
+    <li class="page-item {{ 'disabled' if page >= total_pages }}">
+      <a class="page-link" href="{{ url_for(request.endpoint, page=page + 1, **qs) }}"
+         {% if page >= total_pages %}tabindex="-1" aria-disabled="true"{% endif %}>
+        下一页<i class="bi bi-chevron-right"></i>
+      </a>
+    </li>
+  </ul>
+</nav>
+{% endif %}

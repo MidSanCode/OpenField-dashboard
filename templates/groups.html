@@ -3,6 +3,22 @@
 {% block content %}
 <h2 class="page-title"><i class="bi bi-shield-lock me-2 text-primary"></i>权限组管理</h2>
 
+{# The add-member picker only ever offers a capped slice of accounts, so give the
+   operator a way to reach the rest without loading every user on each render. #}
+<form method="get" class="d-flex gap-2 mb-3" style="max-width: 420px;">
+  <div class="input-group input-group-sm">
+    <span class="input-group-text"><i class="bi bi-search"></i></span>
+    <input type="text" class="form-control" name="mq" value="{{ member_query or '' }}"
+           placeholder="筛选可添加的用户（用户名 / 昵称）">
+  </div>
+  <button class="btn btn-sm btn-primary" type="submit">筛选</button>
+  {% if member_query %}
+  <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('groups') }}">清除</a>
+  {% endif %}
+</form>
+
+{% include "_pagination.html" %}
+
 <div class="d-flex justify-content-end mb-3">
   <button type="button" class="btn btn-success" data-bs-toggle="modal" data-bs-target="#newGroupModal">
     <i class="bi bi-plus-circle me-1"></i>新建权限组

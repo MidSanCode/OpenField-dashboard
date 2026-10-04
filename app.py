@@ -122,6 +122,28 @@ def _request_is_secure():
     )
 
 
+def _page_window(current, total, span=2):
+    """Page numbers to show around the current one, with None marking a gap.
+
+    Keeps the pager a fixed width so a table with thousands of pages renders a
+    short control instead of thousands of links.
+    """
+    current = max(1, int(current))
+    total = max(1, int(total))
+    pages = []
+    last = 0
+    for p in range(1, total + 1):
+        if p <= span or p > total - span or abs(p - current) <= span:
+            if last and p - last > 1:
+                pages.append(None)
+            pages.append(p)
+            last = p
+    return pages
+
+
+app.jinja_env.globals["page_window"] = _page_window
+
+
 @app.errorhandler(413)
 def _request_too_large(error):
     """Explain an oversized upload instead of showing Flask's bare 413."""
@@ -933,6 +955,8 @@ def member_status(member_level, member_expires_at, now=None):
 @login_required
 def users():
     query = request.args.get("q", "").strip()
+    per_page = 50
+    page = _page_param()
     base_select = (
         "SELECT u.id, u.username, u.nickname, u.email, u.avatar_url, u.role, "
         "u.needs_registration, u.oauth2_provider, u.storage_quota, u.is_verified, "
@@ -943,23 +967,50 @@ def users():
         "COALESCE((SELECT w.balance FROM wallets w WHERE w.user_id = u.id), 0) AS wallet_balance "
         "FROM users u "
     )
+    where = ""
+    args = ()
     if query:
         like = f"%{query}%"
-        rows = db.fetch_all(
-            base_select
-            + "WHERE u.username ILIKE %s OR u.nickname ILIKE %s OR u.email ILIKE %s "
-            "ORDER BY u.created_at DESC",
-            (like, like, like),
+        where = (
+            "WHERE u.username ILIKE %s OR u.nickname ILIKE %s OR u.email ILIKE %s "
         )
-    else:
-        rows = db.fetch_all(base_select + "ORDER BY u.created_at DESC")
+        args = (like, like, like)
+
+    # The list used to be unbounded: every render loaded the whole users table
+    # into memory, and each row carried two correlated subqueries (attachment
+    # storage and wallet balance), so the cost grew with the table and a single
+    # page view could exhaust the process on a large instance.
+    total = db.fetch_one(
+        f"SELECT COUNT(*) AS c FROM users u {where}", args
+    )["c"]
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    offset = (page - 1) * per_page
+
+    rows = db.fetch_all(
+        base_select + where + "ORDER BY u.created_at DESC LIMIT %s OFFSET %s",
+        args + (per_page, offset),
+    )
+    _row_levels(rows)
+    return render_template(
+        "users.html",
+        users=rows,
+        query=query,
+        page=page,
+        per_page=per_page,
+        total=total,
+        total_pages=total_pages,
+    )
+
+
+def _row_levels(rows):
+    """Attach the derived level/tier/membership fields the list templates show."""
     for row in rows:
         row["level"] = level_for_exp(row.get("exp"))
         row["tier_name"], row["tier_color"] = tier_for_level(row["level"])
         row["member_active"], row["member_tier_name"] = member_status(
             row.get("member_level"), row.get("member_expires_at")
         )
-    return render_template("users.html", users=rows, query=query)
 
 
 @app.route("/users/<int:user_id>/quota", methods=["POST"])
@@ -1939,30 +1990,67 @@ def _all_permission_keys():
 @app.route("/groups")
 @login_required
 def groups():
+    per_page = 25
+    page = _page_param()
+
+    total = db.fetch_one("SELECT COUNT(*) AS c FROM groups")["c"]
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    page = min(page, total_pages)
+    offset = (page - 1) * per_page
+
     group_rows = db.fetch_all(
         "SELECT g.id, g.name, g.description, g.is_default, g.created_at, "
         "COALESCE(COUNT(ug.user_id), 0) AS member_count "
         "FROM groups g LEFT JOIN user_groups ug ON ug.group_id = g.id "
-        "GROUP BY g.id ORDER BY g.is_default DESC, g.id ASC"
+        "GROUP BY g.id ORDER BY g.is_default DESC, g.id ASC LIMIT %s OFFSET %s",
+        (per_page, offset),
     )
-    perms = db.fetch_all(
-        "SELECT key, name FROM permissions ORDER BY key ASC"
-    )
-    memberships = db.fetch_all(
-        "SELECT group_id, user_id FROM user_groups ORDER BY group_id"
-    )
-    members_by_group = {}
-    for m in memberships:
-        members_by_group.setdefault(m["group_id"], []).append(m["user_id"])
+    group_ids = [g["id"] for g in group_rows]
 
-    perm_keys_by_group = {}
-    for g in group_rows:
-        rows = db.fetch_all(
-            "SELECT permission_key FROM group_permissions WHERE group_id = %s", (g["id"],)
+    perms = db.fetch_all("SELECT key, name FROM permissions ORDER BY key ASC")
+
+    # One query for all the visible groups' permission keys, instead of one
+    # round trip per group. The previous loop opened a fresh connection for each
+    # group on every render, so the page cost grew with the number of groups.
+    perm_keys_by_group = {gid: set() for gid in group_ids}
+    if group_ids:
+        perm_rows = db.fetch_all(
+            "SELECT group_id, permission_key FROM group_permissions "
+            "WHERE group_id = ANY(%s)",
+            (group_ids,),
         )
-        perm_keys_by_group[g["id"]] = {r["permission_key"] for r in rows}
+        for r in perm_rows:
+            perm_keys_by_group.setdefault(r["group_id"], set()).add(r["permission_key"])
 
-    all_users = db.fetch_all("SELECT id, username, nickname FROM users ORDER BY username ASC")
+    # Membership is limited to the visible groups too. Loading the whole
+    # user_groups table every render was unbounded, and the flat (group_id,
+    # user_id) rows carry no ordering the view depends on.
+    members_by_group = {gid: [] for gid in group_ids}
+    if group_ids:
+        member_rows = db.fetch_all(
+            "SELECT group_id, user_id FROM user_groups WHERE group_id = ANY(%s) "
+            "ORDER BY group_id",
+            (group_ids,),
+        )
+        for m in member_rows:
+            members_by_group.setdefault(m["group_id"], []).append(m["user_id"])
+
+    # The add-member picker needs a searchable user list, not the entire table.
+    # Cap it and let the operator narrow it by name rather than loading every
+    # account in the database on each render.
+    member_query = request.args.get("mq", "").strip()
+    if member_query:
+        like = f"%{member_query}%"
+        all_users = db.fetch_all(
+            "SELECT id, username, nickname FROM users "
+            "WHERE username ILIKE %s OR nickname ILIKE %s "
+            "ORDER BY username ASC LIMIT 200",
+            (like, like),
+        )
+    else:
+        all_users = db.fetch_all(
+            "SELECT id, username, nickname FROM users ORDER BY username ASC LIMIT 200"
+        )
     user_lookup = {u["id"]: (u["nickname"] or u["username"]) for u in all_users}
 
     return render_template(
@@ -1974,6 +2062,11 @@ def groups():
         members_by_group=members_by_group,
         all_users=all_users,
         user_lookup=user_lookup,
+        page=page,
+        per_page=per_page,
+        total=total,
+        total_pages=total_pages,
+        member_query=member_query,
     )
 
 
