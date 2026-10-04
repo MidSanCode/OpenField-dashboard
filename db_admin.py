@@ -18,6 +18,22 @@ BACKUP_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "backups")
 # Cap the size of error output surfaced in flash messages.
 _MAX_ERROR_LEN = 3000
 
+# Backup files are a complete copy of every row in the database, including
+# users.password_hash, users.payment_pin_hash, session refresh-token hashes and
+# the panel's own admin_accounts rows. They must not be world-readable on disk
+# and must not be servable without an explicit capability check.
+_BACKUP_FILE_MODE = 0o600
+
+
+def _restrict_file(path):
+    """Best-effort tighten permissions on a file we just created."""
+    try:
+        os.chmod(path, _BACKUP_FILE_MODE)
+    except OSError:
+        # Windows / exotic filesystems: not fatal, the capability gate and
+        # directory location still protect the file.
+        pass
+
 # Largest backup file we will read or import.
 MAX_IMPORT_BYTES = 512 * 1024 * 1024
 
@@ -139,10 +155,24 @@ def list_backups():
 
 
 def backup_path(filename):
-    """Resolve a backup filename inside the backup dir, guarding against traversal."""
+    """Resolve a backup filename inside the backup dir, guarding against traversal.
+
+    Only regular files directly inside BACKUP_DIR are accepted: symlinks are
+    rejected rather than resolved, so a link planted in the directory cannot
+    turn a download into an arbitrary file read of, say, a private key or the
+    panel's own config.py.
+    """
     base = os.path.basename(filename)
+    if not base or base != filename or base in (".", ".."):
+        raise FileNotFoundError(f"备份不存在: {filename}")
+    if os.path.islink(os.path.join(BACKUP_DIR, base)):
+        raise FileNotFoundError(f"备份不存在: {filename}")
     path = os.path.join(BACKUP_DIR, base)
     if not os.path.isfile(path):
+        raise FileNotFoundError(f"备份不存在: {filename}")
+    # Confirm it really lives inside the backup dir after resolution.
+    real = os.path.realpath(path)
+    if real != path and not real.startswith(os.path.realpath(BACKUP_DIR) + os.sep):
         raise FileNotFoundError(f"备份不存在: {filename}")
     return path
 
@@ -197,6 +227,7 @@ def export_backup():
         return None, f"备份失败:\n{_truncate(stderr)}"
 
     size = os.path.getsize(out_path)
+    _restrict_file(out_path)
     return out_path, f"备份完成: {os.path.basename(out_path)}（{size / 1024:.1f} KB）"
 
 

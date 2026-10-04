@@ -514,14 +514,26 @@ def db_import():
     return redirect(url_for("db_page"))
 
 
-@app.route("/db/backups/<path:filename>/download")
+@app.route("/db/backups/<path:filename>/download", methods=["POST"])
 @login_required
 @require_capability(CAP_DB_BACKUP)
 def db_backup_download(filename):
+    # Downloading a dump hands over every credential hash in the database, so
+    # it is a deliberate POST behind the CSRF token and an explicit
+    # confirmation rather than a GET link that any injected image or
+    # prefetching client could trigger silently.
+    if request.form.get("confirm") != "1":
+        flash("请确认后再下载备份：备份包含全部账号口令与令牌哈希。", "error")
+        return redirect(url_for("db_page"))
     try:
         path = db_admin.backup_path(filename)
     except FileNotFoundError:
         abort(404)
+    app.logger.warning(
+        "database backup downloaded: admin_id=%s file=%s",
+        session.get("admin_id"),
+        os.path.basename(path),
+    )
     return send_file(path, as_attachment=True, download_name=os.path.basename(path))
 
 
