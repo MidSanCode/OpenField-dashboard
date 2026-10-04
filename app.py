@@ -176,6 +176,34 @@ _login_attempts = {}  # key -> list of failed-attempt timestamps
 _LOGIN_WINDOW_SECONDS = 15 * 60
 _LOGIN_MAX_FAILURES = 5
 
+# A separate, looser per-source-address budget. Throttling only per
+# (address, username) would let an attacker stay under the limit by rotating
+# usernames, and throttling only per address is what made a proxy deployment
+# lockable by anyone. Keeping both budgets independent means neither dimension
+# can be used to deny service to everyone.
+_LOGIN_MAX_FAILURES_PER_IP = 20
+
+# Number of trusted reverse proxies in front of the panel. Only used to pick
+# the real client address out of X-Forwarded-For; 0 means the panel is exposed
+# directly and the header is ignored entirely.
+_TRUSTED_PROXY_COUNT = int(os.environ.get("ADMIN_TRUSTED_PROXY_COUNT", "0") or 0)
+
+
+def _client_ip():
+    """Return the client address for rate limiting and audit logs.
+
+    X-Forwarded-For is client-controlled unless a proxy actually overwrites
+    it, so it is only consulted when the operator declares how many proxies to
+    trust (ADMIN_TRUSTED_PROXY_COUNT). Counting from the right skips the hops
+    our own proxies appended, which an attacker cannot forge.
+    """
+    if _TRUSTED_PROXY_COUNT > 0:
+        xff = request.headers.get("X-Forwarded-For", "")
+        parts = [p.strip() for p in xff.split(",") if p.strip()]
+        if len(parts) >= _TRUSTED_PROXY_COUNT:
+            return parts[-_TRUSTED_PROXY_COUNT]
+    return request.remote_addr
+
 
 def _login_blocked(key):
     now = time.monotonic()
@@ -185,12 +213,29 @@ def _login_blocked(key):
         return len(stamps) >= _LOGIN_MAX_FAILURES
 
 
+def _login_blocked_ip(ip):
+    now = time.monotonic()
+    with _login_attempts_lock:
+        key = f"ip:{ip}"
+        stamps = [t for t in _login_attempts.get(key, []) if now - t < _LOGIN_WINDOW_SECONDS]
+        _login_attempts[key] = stamps
+        return len(stamps) >= _LOGIN_MAX_FAILURES_PER_IP
+
+
 def _login_record_failure(key):
     now = time.monotonic()
     with _login_attempts_lock:
         stamps = [t for t in _login_attempts.get(key, []) if now - t < _LOGIN_WINDOW_SECONDS]
         stamps.append(now)
         _login_attempts[key] = stamps
+        if key.startswith("ip:"):
+            return
+        ip_key = "ip:" + key.split("|", 1)[0]
+        ip_stamps = [
+            t for t in _login_attempts.get(ip_key, []) if now - t < _LOGIN_WINDOW_SECONDS
+        ]
+        ip_stamps.append(now)
+        _login_attempts[ip_key] = ip_stamps
 
 
 def _login_reset(key):
@@ -205,9 +250,17 @@ def login():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
         password = request.form.get("password", "")
-        # Throttle online password guessing per source IP + username.
-        attempt_key = request.remote_addr or "?" + "|" + username.lower()
-        if _login_blocked(attempt_key):
+        # Throttle online password guessing. The key must combine BOTH the
+        # source address and the submitted username: `request.remote_addr or
+        # "?" + "|" + username.lower()` was parsed as
+        # `remote_addr or (("?" + "|") + username.lower())` because `+` binds
+        # tighter than `or`, so whenever remote_addr was set the username was
+        # dropped and the bucket became IP-only. Behind a reverse proxy every
+        # client shares one address, so five failed logins from anyone locked
+        # out every administrator for 15 minutes.
+        ip = _client_ip() or "?"
+        attempt_key = f"{ip}|{username.lower()}"
+        if _login_blocked(attempt_key) or _login_blocked_ip(ip):
             flash("尝试次数过多，请稍后再试。", "error")
             return render_template("login.html"), 429
         admin = db.fetch_one(
