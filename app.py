@@ -1272,7 +1272,9 @@ def admin_capabilities(admin_id):
         abort(404)
 
     selected = [c for c in request.form.getlist("capabilities") if c in ALL_CAPABILITIES]
-    if request.form.get("is_super") == "1":
+    # Same checkbox convention as the verification toggle: a ticked box sends its
+    # value attribute ("on"), not necessarily "1".
+    if _form_checkbox(request.form.get("is_super")):
         caps = "*"
     else:
         caps = ",".join(sorted(selected))
@@ -1316,28 +1318,74 @@ def _other_admin_can_manage(exclude_admin_id):
 @login_required
 @require_capability(CAP_ADMINS_MANAGE)
 def admin_can_verify(admin_id):
-    admin = db.fetch_one("SELECT id FROM admin_accounts WHERE id = %s", (admin_id,))
+    """Grant or revoke the verification capability for a panel account.
+
+    This read `request.form.get("can_verify") == "1"`, but an HTML checkbox
+    submits its `value` attribute — conventionally "on" — and omits the field
+    entirely when unchecked. So a checked box compared against "1" produced
+    False: ticking it revoked the permission it was meant to grant, and
+    unticking it revoked it too. The toggle was inverted, and the result was
+    written straight to can_verify, so the column silently disagreed with what
+    the operator asked for.
+
+    Accept the checkbox convention (any of the truthy values a browser can send)
+    and treat an absent field as False, which is what "unchecked" means.
+    """
+    admin = db.fetch_one(
+        "SELECT id, username, capabilities FROM admin_accounts WHERE id = %s",
+        (admin_id,),
+    )
     if not admin:
         abort(404)
-    can_verify = request.form.get("can_verify") == "1"
-    db.execute(
-        "UPDATE admin_accounts SET can_verify = %s WHERE id = %s",
-        (can_verify, admin_id),
-    )
-    # Reflect the change in the capability list too, so the two models agree.
-    row = db.fetch_one("SELECT capabilities FROM admin_accounts WHERE id = %s", (admin_id,))
-    caps = {c.strip() for c in (row.get("capabilities") or "").split(",") if c.strip()}
-    if "*" not in caps:
+
+    raw = request.form.get("can_verify")
+    can_verify = _form_checkbox(raw)
+
+    caps = {c.strip() for c in (admin.get("capabilities") or "").split(",") if c.strip()}
+    # Super accounts hold '*' which already implies every capability; adding a
+    # key would be meaningless and removing one would not restrict them.
+    if "*" in caps:
+        new_caps = "*"
+    else:
         if can_verify:
             caps.add(CAP_USERS_VERIFY)
         else:
             caps.discard(CAP_USERS_VERIFY)
-        db.execute(
-            "UPDATE admin_accounts SET capabilities = %s WHERE id = %s",
-            (",".join(sorted(caps)), admin_id),
+        new_caps = ",".join(sorted(caps))
+
+    # can_verify and the capability list are two views of one fact, so write
+    # them together rather than in two autocommitted statements that could
+    # disagree if the second failed.
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE admin_accounts SET can_verify = %s, capabilities = %s WHERE id = %s",
+            (can_verify, new_caps, admin_id),
         )
-    flash("Verifier permission updated.", "success")
+
+    _audit(
+        "admin.can_verify",
+        target_type="admin",
+        target_id=admin_id,
+        detail=f"{admin['username']}: can_verify={can_verify}",
+    )
+    flash(
+        f"已{'授予' if can_verify else '撤销'} {admin['username']} 的认证权限。",
+        "success",
+    )
     return redirect(url_for("admins"))
+
+
+def _form_checkbox(value):
+    """Interpret a form value as a checkbox state.
+
+    Returns True for the values a browser actually submits for a ticked box and
+    False for anything else, including a missing field. Centralised because
+    comparing against a single literal is how the verification toggle came to
+    invert its meaning.
+    """
+    if value is None:
+        return False
+    return str(value).strip().lower() in ("1", "on", "true", "yes")
 
 
 def _revoke_sessions(admin_id):
@@ -1449,24 +1497,50 @@ def _password_policy_error(password):
 @login_required
 @require_capability(CAP_USERS_VERIFY)
 def user_verified(user_id):
-    user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
+    user = db.fetch_one(
+        "SELECT id, username, is_verified, verified_by, verified_note FROM users WHERE id = %s",
+        (user_id,),
+    )
     if not user:
         abort(404)
-    verified = request.form.get("verified") == "1"
+
+    # The checkbox is the authority on the badge. This used to force verified
+    # back to True whenever the verified_by/verified_note fields were non-empty
+    # — but the modal backfills both from the current row, so they were ALWAYS
+    # non-empty for a user who had ever been verified. Unticking the box could
+    # therefore never revoke the mark: the operator unchecked it, submitted, and
+    # the badge stayed.
+    verified = _form_checkbox(request.form.get("verified"))
     verified_by = request.form.get("verified_by", "").strip()
     verified_note = request.form.get("verified_note", "").strip()
-    # Writing verification detail (对象/内容) implies an active verification
-    # even when the quick toggle was left off, so the badge reliably appears
-    # after the user's name.
-    if verified_by or verified_note:
-        verified = True
-    if verified and not verified_by:
-        verified_by = "admin"
+
+    if verified:
+        # A verified account with no stated subject still needs one so the badge
+        # has something to show.
+        if not verified_by:
+            verified_by = "admin"
+    else:
+        # Revoking clears the supporting detail too, so a later re-verification
+        # cannot silently resurrect stale text that was never re-confirmed.
+        verified_by = ""
+        verified_note = ""
+
     db.execute(
-        "UPDATE users SET is_verified = %s, verified_by = %s, verified_note = %s, updated_at = NOW() WHERE id = %s",
+        "UPDATE users SET is_verified = %s, verified_by = %s, verified_note = %s, "
+        "updated_at = NOW() WHERE id = %s",
         (verified, verified_by, verified_note, user_id),
     )
-    flash("Verified status updated.", "success")
+    _audit(
+        "user.verify" if verified else "user.unverify",
+        target_type="user",
+        target_id=user_id,
+        detail=f"{user['username']}: is_verified={verified}"
+        + (f" by={verified_by}" if verified_by else ""),
+    )
+    flash(
+        f"已{'授予' if verified else '撤销'} {user['username']} 的认证标记。",
+        "success",
+    )
     return redirect(url_for("users"))
 
 
