@@ -104,6 +104,35 @@ def init_admin_table():
             ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS can_verify BOOLEAN NOT NULL DEFAULT TRUE
             """
         )
+        # Explicit capability model. can_verify only ever gated the two
+        # verification routes, so every other privileged action (resetting an
+        # application user's password or payment PIN, granting permission
+        # keys, restoring a database dump) was reachable by any authenticated
+        # panel account. capabilities is a comma-separated list of the
+        # capability names checked by app.require_capability.
+        execute(
+            """
+            ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS capabilities TEXT NOT NULL DEFAULT ''
+            """
+        )
+        # Existing accounts predate the model and were able to do all of this,
+        # so they keep full capabilities rather than being silently stripped.
+        # can_verify=FALSE accounts were intended to be restricted, so they get
+        # verification only.
+        execute(
+            """
+            UPDATE admin_accounts
+               SET capabilities = '*'
+             WHERE COALESCE(capabilities, '') = '' AND can_verify = TRUE
+            """
+        )
+        execute(
+            """
+            UPDATE admin_accounts
+               SET capabilities = 'users.verify'
+             WHERE COALESCE(capabilities, '') = '' AND can_verify = FALSE
+            """
+        )
         # User-verification columns only make sense once the OpenField schema (and
         # the users table) exists; on a brand-new database this runs after the Go
         # server migrations have initialized the schema.

@@ -48,6 +48,105 @@ except Exception as e:
     app.logger.error("failed to initialize admin table at startup: %s", e)
 
 
+# ---------- capabilities ----------
+
+# Named capabilities gating whole classes of privileged action. Granted per
+# panel account via admin_accounts.capabilities (comma-separated). The special
+# value "*" means every capability.
+CAP_USERS_CREDENTIALS = "users.credentials"  # reset an application password/PIN
+CAP_USERS_WRITE = "users.write"              # create/rename/delete application users
+CAP_USERS_PUNISH = "users.punish"            # punish, ban, adjust wallet/membership
+CAP_USERS_VERIFY = "users.verify"            # grant/revoke the verification badge
+CAP_USERS_GROUPS = "users.groups"            # attach permission keys to groups
+CAP_DB_RESTORE = "db.restore"                # import a database dump
+CAP_DB_BACKUP = "db.backup"                  # export/download/delete dumps
+CAP_SERVER_MANAGE = "server.manage"          # start/stop/build server processes
+CAP_PLUGINS_WRITE = "plugins.write"          # publish/unpublish plugins
+CAP_ADMINS_MANAGE = "admins.manage"          # manage panel accounts
+
+ALL_CAPABILITIES = (
+    CAP_USERS_CREDENTIALS,
+    CAP_USERS_WRITE,
+    CAP_USERS_PUNISH,
+    CAP_USERS_VERIFY,
+    CAP_USERS_GROUPS,
+    CAP_DB_RESTORE,
+    CAP_DB_BACKUP,
+    CAP_SERVER_MANAGE,
+    CAP_PLUGINS_WRITE,
+    CAP_ADMINS_MANAGE,
+)
+
+# Human-readable labels for the account-management UI.
+CAPABILITY_LABELS = {
+    CAP_USERS_CREDENTIALS: "重置应用账号口令/PIN",
+    CAP_USERS_WRITE: "创建/重命名/删除用户",
+    CAP_USERS_PUNISH: "处罚、封禁、钱包与会员调整",
+    CAP_USERS_VERIFY: "发放/撤销认证标记",
+    CAP_USERS_GROUPS: "配置用户组权限",
+    CAP_DB_RESTORE: "导入数据库备份",
+    CAP_DB_BACKUP: "导出/下载/删除备份",
+    CAP_SERVER_MANAGE: "启停与构建服务进程",
+    CAP_PLUGINS_WRITE: "发布/下架插件",
+    CAP_ADMINS_MANAGE: "管理面板账号",
+}
+
+
+def _current_admin_capabilities():
+    """Return the capability set for the signed-in panel account.
+
+    Returns None when the account cannot be read, which the callers treat as
+    denial so a database problem never widens access.
+    """
+    admin_id = session.get("admin_id")
+    if admin_id is None:
+        return None
+    row = db.fetch_one(
+        "SELECT capabilities FROM admin_accounts WHERE id = %s", (admin_id,)
+    )
+    if not row:
+        return None
+    raw = row.get("capabilities") or ""
+    caps = {c.strip() for c in raw.split(",") if c.strip()}
+    if "*" in caps:
+        return set(ALL_CAPABILITIES)
+    return caps
+
+
+def has_capability(cap):
+    caps = _current_admin_capabilities()
+    return caps is not None and cap in caps
+
+
+def require_capability(cap):
+    """Gate a view behind a named capability.
+
+    can_verify was the panel's only secondary permission and was enforced on
+    just two of its routes, so a "restricted" account could still reset any
+    application account's password. This decorator is the explicit model that
+    replaces guessing from a single boolean.
+    """
+
+    def decorator(view):
+        @functools.wraps(view)
+        def wrapped(*args, **kwargs):
+            if session.get("admin_id") is None:
+                return redirect(url_for("login"))
+            if not has_capability(cap):
+                app.logger.warning(
+                    "capability denied: admin_id=%s capability=%s path=%s",
+                    session.get("admin_id"),
+                    cap,
+                    request.path,
+                )
+                abort(403)
+            return view(*args, **kwargs)
+
+        return wrapped
+
+    return decorator
+
+
 # ---------- CSRF protection ----------
 
 def _ensure_csrf_token():
@@ -346,6 +445,7 @@ def db_page():
 
 @app.route("/db/init", methods=["POST"])
 @login_required
+@require_capability(CAP_DB_RESTORE)
 def db_init():
     status = db.schema_status()
     if status["ok"]:
@@ -358,6 +458,7 @@ def db_init():
 
 @app.route("/db/export", methods=["POST"])
 @login_required
+@require_capability(CAP_DB_BACKUP)
 def db_export():
     path, msg = db_admin.export_backup()
     flash(msg, "success" if path else "error")
@@ -366,6 +467,7 @@ def db_export():
 
 @app.route("/db/import", methods=["POST"])
 @login_required
+@require_capability(CAP_DB_RESTORE)
 def db_import():
     if request.form.get("confirm") != "1":
         flash("请勾选「我理解导入会覆盖当前数据」后再执行导入。", "error")
@@ -414,6 +516,7 @@ def db_import():
 
 @app.route("/db/backups/<path:filename>/download")
 @login_required
+@require_capability(CAP_DB_BACKUP)
 def db_backup_download(filename):
     try:
         path = db_admin.backup_path(filename)
@@ -424,6 +527,7 @@ def db_backup_download(filename):
 
 @app.route("/db/backups/<path:filename>/delete", methods=["POST"])
 @login_required
+@require_capability(CAP_DB_BACKUP)
 def db_backup_delete(filename):
     try:
         db_admin.delete_backup(filename)
@@ -435,6 +539,7 @@ def db_backup_delete(filename):
 
 @app.route("/server/config", methods=["POST"])
 @login_required
+@require_capability(CAP_SERVER_MANAGE)
 def server_config():
     cfg = server_manager.load_config()
     new_root = request.form.get("server_root", "").strip()
@@ -459,6 +564,7 @@ def server_config():
 
 @app.route("/server/<service_name>/build", methods=["POST"])
 @login_required
+@require_capability(CAP_SERVER_MANAGE)
 def server_build(service_name):
     cfg = server_manager.load_config()
     ok, msg = server_manager.build_service(cfg, service_name)
@@ -468,6 +574,7 @@ def server_build(service_name):
 
 @app.route("/server/<service_name>/start", methods=["POST"])
 @login_required
+@require_capability(CAP_SERVER_MANAGE)
 def server_start(service_name):
     cfg = server_manager.load_config()
     ok, msg = server_manager.start_service(cfg, service_name)
@@ -477,6 +584,7 @@ def server_start(service_name):
 
 @app.route("/server/<service_name>/stop", methods=["POST"])
 @login_required
+@require_capability(CAP_SERVER_MANAGE)
 def server_stop(service_name):
     cfg = server_manager.load_config()
     ok, msg = server_manager.stop_service(cfg, service_name)
@@ -486,6 +594,7 @@ def server_stop(service_name):
 
 @app.route("/server/start-all", methods=["POST"])
 @login_required
+@require_capability(CAP_SERVER_MANAGE)
 def server_start_all():
     cfg = server_manager.load_config()
     errors = []
@@ -505,6 +614,7 @@ def server_start_all():
 
 @app.route("/server/stop-all", methods=["POST"])
 @login_required
+@require_capability(CAP_SERVER_MANAGE)
 def server_stop_all():
     cfg = server_manager.load_config()
     stopped = 0
@@ -634,6 +744,7 @@ def users():
 
 @app.route("/users/<int:user_id>/quota", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_PUNISH)
 def user_quota(user_id):
     user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
@@ -657,6 +768,7 @@ def user_quota(user_id):
 
 @app.route("/users/new", methods=["GET", "POST"])
 @login_required
+@require_capability(CAP_USERS_WRITE)
 def user_new():
     if request.method == "POST":
         username = request.form.get("username", "").strip()
@@ -689,6 +801,7 @@ def user_new():
 
 @app.route("/users/<int:user_id>/wallet", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_PUNISH)
 def user_wallet(user_id):
     user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
     if not user:
@@ -793,6 +906,7 @@ def user_wallet_history(user_id):
 
 @app.route("/users/<int:user_id>/membership", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_PUNISH)
 def user_membership(user_id):
     user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
     if not user:
@@ -834,6 +948,7 @@ def user_membership(user_id):
 
 @app.route("/users/<int:user_id>/role", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_WRITE)
 def user_role(user_id):
     role = request.form.get("role", "user")
     if role not in ("user", "admin"):
@@ -848,6 +963,7 @@ def user_role(user_id):
 
 @app.route("/users/<int:user_id>/punish", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_PUNISH)
 def user_punish(user_id):
     """Record a moderation action and apply its side effects.
 
@@ -980,21 +1096,75 @@ def user_punishment_history(user_id):
 @login_required
 def admins():
     admins = db.fetch_all(
-        "SELECT id, username, can_verify, created_at FROM admin_accounts ORDER BY id ASC"
+        "SELECT id, username, can_verify, capabilities, created_at "
+        "FROM admin_accounts ORDER BY id ASC"
     )
-    return render_template("admins.html", admins=admins)
+    for a in admins:
+        raw = a.get("capabilities") or ""
+        caps = {c.strip() for c in raw.split(",") if c.strip()}
+        a["cap_list"] = sorted(caps)
+        a["is_super"] = "*" in caps
+    return render_template(
+        "admins.html",
+        admins=admins,
+        all_capabilities=ALL_CAPABILITIES,
+        capability_labels=CAPABILITY_LABELS,
+    )
+
+
+@app.route("/admins/<int:admin_id>/capabilities", methods=["POST"])
+@login_required
+@require_capability(CAP_ADMINS_MANAGE)
+def admin_capabilities(admin_id):
+    admin = db.fetch_one("SELECT id FROM admin_accounts WHERE id = %s", (admin_id,))
+    if not admin:
+        abort(404)
+
+    selected = [c for c in request.form.getlist("capabilities") if c in ALL_CAPABILITIES]
+    if request.form.get("is_super") == "1":
+        caps = "*"
+    else:
+        caps = ",".join(sorted(selected))
+
+    # An account holding admins.manage could otherwise strip its own access and
+    # permanently lock every operator out of the panel, so refuse the change
+    # when it would leave nobody able to manage accounts.
+    if admin_id == session.get("admin_id") and not _cap_string_has(caps, CAP_ADMINS_MANAGE):
+        if not _other_admin_can_manage(session.get("admin_id")):
+            flash("不能移除自己最后一个「管理面板账号」权限。", "error")
+            return redirect(url_for("admins"))
+
+    db.execute(
+        "UPDATE admin_accounts SET capabilities = %s WHERE id = %s", (caps, admin_id)
+    )
+    # Keep can_verify in step with the capability so the older verification
+    # UI and the new model cannot disagree.
+    db.execute(
+        "UPDATE admin_accounts SET can_verify = %s WHERE id = %s",
+        (_cap_string_has(caps, CAP_USERS_VERIFY), admin_id),
+    )
+    flash("账号权限已更新。", "success")
+    return redirect(url_for("admins"))
+
+
+def _cap_string_has(caps, cap):
+    if caps == "*":
+        return True
+    return cap in {c.strip() for c in (caps or "").split(",") if c.strip()}
+
+
+def _other_admin_can_manage(exclude_admin_id):
+    """Report whether another account can still manage panel accounts."""
+    rows = db.fetch_all(
+        "SELECT id, capabilities FROM admin_accounts WHERE id <> %s", (exclude_admin_id,)
+    )
+    return any(_cap_string_has(r.get("capabilities") or "", CAP_ADMINS_MANAGE) for r in rows)
 
 
 @app.route("/admins/<int:admin_id>/can-verify", methods=["POST"])
 @login_required
+@require_capability(CAP_ADMINS_MANAGE)
 def admin_can_verify(admin_id):
-    current = db.fetch_one(
-        "SELECT can_verify FROM admin_accounts WHERE id = %s",
-        (session.get("admin_id"),),
-    )
-    if not current or not current.get("can_verify"):
-        flash("You do not have permission to manage verifiers.", "error")
-        return redirect(url_for("admins"))
     admin = db.fetch_one("SELECT id FROM admin_accounts WHERE id = %s", (admin_id,))
     if not admin:
         abort(404)
@@ -1003,20 +1173,26 @@ def admin_can_verify(admin_id):
         "UPDATE admin_accounts SET can_verify = %s WHERE id = %s",
         (can_verify, admin_id),
     )
+    # Reflect the change in the capability list too, so the two models agree.
+    row = db.fetch_one("SELECT capabilities FROM admin_accounts WHERE id = %s", (admin_id,))
+    caps = {c.strip() for c in (row.get("capabilities") or "").split(",") if c.strip()}
+    if "*" not in caps:
+        if can_verify:
+            caps.add(CAP_USERS_VERIFY)
+        else:
+            caps.discard(CAP_USERS_VERIFY)
+        db.execute(
+            "UPDATE admin_accounts SET capabilities = %s WHERE id = %s",
+            (",".join(sorted(caps)), admin_id),
+        )
     flash("Verifier permission updated.", "success")
     return redirect(url_for("admins"))
 
 
 @app.route("/users/<int:user_id>/verified", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_VERIFY)
 def user_verified(user_id):
-    admin = db.fetch_one(
-        "SELECT can_verify FROM admin_accounts WHERE id = %s",
-        (session.get("admin_id"),),
-    )
-    if not admin or not admin.get("can_verify"):
-        flash("You do not have permission to verify users.", "error")
-        return redirect(url_for("users"))
     user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
         abort(404)
@@ -1040,6 +1216,7 @@ def user_verified(user_id):
 
 @app.route("/users/<int:user_id>/reset-password", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_CREDENTIALS)
 def user_reset_password(user_id):
     user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
     if not user:
@@ -1064,6 +1241,7 @@ USERNAME_RE = re.compile(r"^[a-z0-9_]{3,32}$")
 
 @app.route("/users/<int:user_id>/rename", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_WRITE)
 def user_rename(user_id):
     """Change a user's username (the only rename path: registration sets it
     once and clients cannot rename themselves). Enforces the same rule as
@@ -1089,6 +1267,7 @@ def user_rename(user_id):
 
 @app.route("/users/<int:user_id>/reset-pin", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_CREDENTIALS)
 def user_reset_pin(user_id):
     user = db.fetch_one("SELECT id, username FROM users WHERE id = %s", (user_id,))
     if not user:
@@ -1108,6 +1287,7 @@ def user_reset_pin(user_id):
 
 @app.route("/users/<int:user_id>/delete", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_WRITE)
 def user_delete(user_id):
     if user_id == session.get("admin_id"):
         # admin_id is the admin_accounts id, not the users table id
@@ -1122,6 +1302,7 @@ def user_delete(user_id):
 
 @app.route("/users/<int:user_id>/unbind-oauth", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_CREDENTIALS)
 def user_unbind_oauth(user_id):
     user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
     if not user:
@@ -1241,6 +1422,7 @@ def groups():
 
 @app.route("/groups", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_GROUPS)
 def group_create():
     name = request.form.get("name", "").strip()
     description = request.form.get("description", "").strip()
@@ -1264,6 +1446,7 @@ def group_create():
 
 @app.route("/groups/<int:group_id>/permissions", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_GROUPS)
 def group_permissions(group_id):
     group = db.fetch_one("SELECT id, name FROM groups WHERE id = %s", (group_id,))
     if not group:
@@ -1284,6 +1467,7 @@ def group_permissions(group_id):
 
 @app.route("/groups/<int:group_id>/members/add", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_GROUPS)
 def group_member_add(group_id):
     group = db.fetch_one("SELECT id, name FROM groups WHERE id = %s", (group_id,))
     if not group:
@@ -1303,6 +1487,7 @@ def group_member_add(group_id):
 
 @app.route("/groups/<int:group_id>/members/remove", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_GROUPS)
 def group_member_remove(group_id):
     group = db.fetch_one("SELECT id, name, is_default FROM groups WHERE id = %s", (group_id,))
     if not group:
@@ -1321,6 +1506,7 @@ def group_member_remove(group_id):
 
 @app.route("/groups/<int:group_id>/delete", methods=["POST"])
 @login_required
+@require_capability(CAP_USERS_GROUPS)
 def group_delete(group_id):
     group = db.fetch_one("SELECT id, name, is_default FROM groups WHERE id = %s", (group_id,))
     if not group:
@@ -1412,6 +1598,7 @@ def plugins():
 
 @app.route("/plugins/upload", methods=["POST"])
 @login_required
+@require_capability(CAP_PLUGINS_WRITE)
 def plugin_upload():
     file = request.files.get("file")
     if not file or not file.filename:
@@ -1456,6 +1643,7 @@ def plugin_upload():
 
 @app.route("/plugins/<plugin_id>/publish", methods=["POST"])
 @login_required
+@require_capability(CAP_PLUGINS_WRITE)
 def plugin_publish(plugin_id):
     row = db.fetch_one("SELECT id FROM plugins WHERE id = %s", (plugin_id,))
     if not row:
@@ -1470,6 +1658,7 @@ def plugin_publish(plugin_id):
 
 @app.route("/plugins/<plugin_id>/unpublish", methods=["POST"])
 @login_required
+@require_capability(CAP_PLUGINS_WRITE)
 def plugin_unpublish(plugin_id):
     row = db.fetch_one("SELECT id FROM plugins WHERE id = %s", (plugin_id,))
     if not row:
@@ -1484,6 +1673,7 @@ def plugin_unpublish(plugin_id):
 
 @app.route("/plugins/<plugin_id>/delete", methods=["POST"])
 @login_required
+@require_capability(CAP_PLUGINS_WRITE)
 def plugin_delete(plugin_id):
     row = db.fetch_one("SELECT id, file_path FROM plugins WHERE id = %s", (plugin_id,))
     if not row:
