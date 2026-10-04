@@ -96,11 +96,35 @@ if not SERVER_ROOT:
 
 SESSION_COOKIE_NAME = "openfield_admin"
 SESSION_COOKIE_HTTPONLY = True
-# SameSite=Lax stops cross-site POSTs from carrying the cookie (the classic
-# CSRF vector); Secure keeps the cookie off plain HTTP when the panel is
-# served over TLS (enable via ADMIN_COOKIE_SECURE=true).
 SESSION_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SECURE = os.getenv("ADMIN_COOKIE_SECURE", "").lower() in ("1", "true", "yes")
+# SameSite=Lax stops cross-site POSTs from carrying the cookie (the classic
+# CSRF vector); Secure keeps the cookie off plain HTTP.
+#
+# The panel's only credential is this cookie, so on any link where an on-path
+# attacker can read traffic, a non-Secure cookie hands over the session. It
+# cannot simply default to True, because the panel is normally reached over
+# plain HTTP on loopback for local administration (app.run binds 127.0.0.1) and
+# a Secure cookie would never be sent there, making the panel unusable.
+#
+# The compromise: default to False only on loopback, and to True otherwise. An
+# operator who exposes the panel beyond the local machine gets the safe value
+# without having to know about this setting, while local use keeps working.
+# ADMIN_COOKIE_SECURE overrides either way.
+_COOKIE_SECURE_ENV = os.getenv("ADMIN_COOKIE_SECURE", "").strip().lower()
+
+
+def _cookie_secure_default():
+    if _COOKIE_SECURE_ENV:
+        return _COOKIE_SECURE_ENV in ("1", "true", "yes", "on")
+    return not _is_loopback_host(os.getenv("ADMIN_BIND_HOST", "127.0.0.1"))
+
+
+def _is_loopback_host(host):
+    host = (host or "").strip().lower().strip("[]")
+    return host in ("127.0.0.1", "localhost", "::1") or host.startswith("127.")
+
+
+SESSION_COOKIE_SECURE = _cookie_secure_default()
 
 # Advisory lock id used to serialize database initialization.
 DB_INIT_LOCK_ID = int(os.getenv("ADMIN_DB_INIT_LOCK_ID", "1207"))

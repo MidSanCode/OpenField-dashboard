@@ -713,11 +713,25 @@ def db_import():
     if not file.filename.lower().endswith(".sql"):
         flash("仅支持从本面板导出的 .sql 备份文件。", "error")
         return redirect(url_for("db_page"))
-    tmp_path = os.path.join(
-        tempfile.gettempdir(), f"openfield-import-{uuid.uuid4().hex}.sql"
-    )
+    # The dump holds the entire database — every password hash, every private
+    # message — and it used to be written straight into the shared temp
+    # directory with default permissions via file.save(), where any other local
+    # user could read it for the whole import window. Restrict the directory
+    # rather than just the file: a world-readable directory lets a local attacker
+    # merely LIST what is there and race the filename, while 0700 removes both.
+    tmp_dir = tempfile.mkdtemp(prefix="openfield-import-")
     try:
-        file.save(tmp_path)
+        os.chmod(tmp_dir, 0o700)
+    except OSError:
+        pass
+    tmp_path = os.path.join(tmp_dir, f"openfield-import-{uuid.uuid4().hex}.sql")
+    try:
+        # Create the file 0600 BEFORE writing content into it, so there is no
+        # window in which it exists with wider permissions.
+        fd = os.open(tmp_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            file.save(fh)
+        db_admin._restrict_file(tmp_path)
         # Screen the upload before it can reach psql. The check is repeated
         # inside import_backup so no call path can skip it.
         sql_text = db_admin.read_import_file(tmp_path)
@@ -737,8 +751,15 @@ def db_import():
         app.logger.error("failed to import backup: %s", e)
         flash(f"导入失败: {e}", "error")
     finally:
+        # Remove the dump and its private directory even on the failure and
+        # early-return paths above, so nothing is left behind after the import
+        # window closes.
         try:
             os.remove(tmp_path)
+        except OSError:
+            pass
+        try:
+            os.rmdir(tmp_dir)
         except OSError:
             pass
     return redirect(url_for("db_page"))
@@ -2415,4 +2436,17 @@ if __name__ == "__main__":
             + ", ".join(_missing)
             + "\n请在启动前设置这些变量（见 README）。"
         )
-    app.run(host="127.0.0.1", port=1343, debug=False)
+
+    # The session cookie is the panel's only credential. Warn loudly when it is
+    # not Secure, since that is only acceptable for local administration.
+    if not config.SESSION_COOKIE_SECURE:
+        app.logger.warning(
+            "会话 cookie 未设置 Secure：仅适用于本机管理。若面板可被其它主机访问，"
+            "请设置 ADMIN_COOKIE_SECURE=true（并通过 HTTPS 提供服务）。"
+        )
+
+    # Loopback by default. Binding elsewhere exposes an administrative panel
+    # whose cookie is only sent over TLS when ADMIN_COOKIE_SECURE is set, so the
+    # choice of bind address is a security decision, not just a networking one.
+    bind_host = os.getenv("ADMIN_BIND_HOST", "127.0.0.1").strip() or "127.0.0.1"
+    app.run(host=bind_host, port=1343, debug=False)
