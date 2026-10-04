@@ -16,11 +16,9 @@
   <p class="text-muted">请确认数据库服务已启动后重新登录。</p>
   <a class="btn btn-primary mt-2" href="{{ url_for('login') }}">重新登录</a>
   {% endif %}
-  {% if error %}
-  <div class="text-start mx-auto mt-4" style="max-width: 640px;">
-    <p class="small text-muted mb-1">错误详情：</p>
-    <pre class="small bg-light p-2 rounded"><code>{{ error }}</code></pre>
-  </div>
-  {% endif %}
+  {# No exception text is shown here. The raw database error names tables and
+     columns, and a connection failure can echo the DSN including its password,
+     to whoever happened to trigger the request. The detail goes to the panel log
+     where the operator can read it. #}
 </div>
 {% endblock %}

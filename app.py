@@ -374,9 +374,17 @@ def inject_db_status():
 
 @app.errorhandler(psycopg2.Error)
 def handle_db_error(exc):
-    """Any database error renders a friendly page instead of a crash."""
+    """Any database error renders a friendly page instead of a crash.
+
+    The exception text used to be rendered into the page and returned with a 200.
+    That leaked the query, the table and column names, and on a connection
+    failure the DSN — potentially including a password — to whoever triggered it,
+    while the 200 told every client, proxy and monitoring check that the request
+    had succeeded, so a fully broken panel looked healthy. Log the detail for the
+    operator and show the visitor a generic message with a real error status.
+    """
     app.logger.error("database error: %s", exc)
-    return render_template("db_unavailable.html", error=str(exc)), 200
+    return render_template("db_unavailable.html"), 503
 
 
 # ---------- auth ----------
@@ -657,6 +665,9 @@ def dashboard():
         "posts": db.fetch_one("SELECT COUNT(*) AS c FROM posts")["c"],
         "messages": db.fetch_one("SELECT COUNT(*) AS c FROM messages")["c"],
         "attachments": db.fetch_one("SELECT COUNT(*) AS c FROM attachments")["c"],
+        # Counts accounts carrying the 'admin' marker in users.role. Nothing on
+        # the server reads that column — real authorization is group permissions
+        # — so this is a labelling statistic, not a count of who has admin access.
         "admins": db.fetch_one("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'")["c"],
         "pending": db.fetch_one(
             "SELECT COUNT(*) AS c FROM users WHERE needs_registration = TRUE"
@@ -1104,6 +1115,18 @@ def user_new():
                 "or underscores.",
                 "error",
             )
+        elif role not in ("user", "admin"):
+            # 'role' was written straight into the column, so an arbitrary value
+            # produced an account the panel's own filters do not recognise: it
+            # showed as neither 普通用户 nor 管理员 in the list, and the dashboard
+            # admin count (role = 'admin') silently disagreed with reality.
+            flash("角色无效。", "error")
+        elif (policy_error := _password_policy_error(password)) is not None:
+            # Registration is what clients use; this path could create an account
+            # with a one-character password, or one whose surrounding whitespace
+            # makes it untypeable at the login form, while the panel's own
+            # password-change route refused exactly those.
+            flash(policy_error, "error")
         elif db.fetch_one("SELECT id FROM users WHERE username = %s", (username,)):
             flash("Username already taken.", "error")
         else:

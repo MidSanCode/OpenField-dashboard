@@ -12,7 +12,7 @@
   <div class="col-6 col-md-4 col-xl-2">
     <div class="card stat-card p-3">
       <div class="icon bg-success-subtle text-success"><i class="bi bi-person-gear"></i></div>
-      <div><div class="num">{{ counts.admins }}</div><div class="label">管理员</div></div>
+      <div><div class="num">{{ counts.admins }}</div><div class="label" title="仅统计 users.role 标记；实际权限由「权限组」决定">管理员标记</div></div>
     </div>
   </div>
   <div class="col-6 col-md-4 col-xl-2">
@@ -59,7 +59,7 @@
           <td>{{ u.nickname }}</td>
           <td class="text-muted">{{ u.email }}</td>
           <td>
-            <span class="badge {{ 'badge-soft-admin' if u.role == 'admin' else 'badge-soft-user' }}">{{ '管理员' if u.role == 'admin' else '普通用户' }}</span>
+            <span class="badge {{ 'badge-soft-admin' if u.role == 'admin' else 'badge-soft-user' }}">{{ '管理员标记' if u.role == 'admin' else '普通用户' }}</span>
             {% if u.needs_registration %}<span class="badge badge-soft-pending">待注册</span>{% endif %}
           </td>
           <td class="text-muted">{{ u.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
