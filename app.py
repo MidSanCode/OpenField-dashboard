@@ -348,6 +348,18 @@ def _client_ip():
     return request.remote_addr
 
 
+def _utcnow():
+    """Current time as a timezone-aware UTC datetime.
+
+    Always use this (or NOW() in SQL) when writing to a TIMESTAMPTZ column.
+    A naive local datetime makes PostgreSQL apply the server's timezone offset,
+    which shifted expiry timestamps by hours — enough for a short ban or
+    membership to be stored already expired. The Go server works in UTC, so the
+    panel matches it.
+    """
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
 def _audit(action, target_type="", target_id="", detail=""):
     """Record a privileged panel action in admin_audit_log.
 
@@ -1026,7 +1038,10 @@ def user_membership(user_id):
     if days <= 0:
         flash("Days must be greater than 0.", "error")
         return redirect(url_for("users"))
-    expires_at = datetime.datetime.now() + datetime.timedelta(days=days)
+    # member_expires_at is TIMESTAMPTZ; a naive local value would be read in the
+    # database's timezone and land hours off — for a 1-day grant that can mean
+    # the membership is already expired. Use aware UTC like the Go server.
+    expires_at = _utcnow() + datetime.timedelta(days=days)
     db.execute(
         "UPDATE users SET member_level = %s, member_expires_at = %s, "
         "updated_at = NOW() WHERE id = %s",
@@ -1093,42 +1108,70 @@ def user_punish(user_id):
         if hours <= 0:
             flash("封禁时长必须大于 0。", "error")
             return redirect(url_for("users"))
-        expires_at = datetime.datetime.now() + datetime.timedelta(hours=hours)
+        # banned_until is a TIMESTAMPTZ column. datetime.now() returns a NAIVE
+        # local time; writing one into a timestamptz column makes PostgreSQL
+        # interpret it in the server's timezone, so on a host whose local time
+        # is ahead of the database's a short ban was stored already expired and
+        # silently had no effect. Use an aware UTC value, matching the Go
+        # server's convention ("NOW()" / time.Now().UTC()).
+        expires_at = _utcnow() + datetime.timedelta(hours=hours)
 
-    # Apply the side effect in the same transaction as the history record.
-    db.execute(
-        "INSERT INTO user_punishments (user_id, operator_id, type, permission_key, reason, expires_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s)",
-        (user_id, None, ptype, perm_key, reason, expires_at),
+    # The history row and its side effects must land together: previously each
+    # statement ran on its own autocommit connection, so a failure partway
+    # through committed a punishment record whose side effect never applied
+    # (or, worse for unban, cleared the ban without recording it).
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT INTO user_punishments "
+            "(user_id, operator_id, operator_username, type, permission_key, reason, expires_at) "
+            "VALUES (%s, NULL, %s, %s, %s, %s, %s)",
+            (
+                user_id,
+                session.get("admin_username") or "",
+                ptype,
+                perm_key,
+                reason,
+                expires_at,
+            ),
+        )
+        if ptype == "revoke":
+            cur.execute(
+                "INSERT INTO user_permission_bans (user_id, permission_key, reason) "
+                "VALUES (%s, %s, %s) ON CONFLICT (user_id, permission_key) "
+                "DO UPDATE SET reason = EXCLUDED.reason",
+                (user_id, perm_key, reason),
+            )
+        elif ptype == "temp_ban":
+            cur.execute(
+                "UPDATE users SET status = 'banned', banned_until = %s, updated_at = NOW() WHERE id = %s",
+                (expires_at, user_id),
+            )
+        elif ptype == "ban":
+            cur.execute(
+                "UPDATE users SET status = 'banned', banned_until = NULL, updated_at = NOW() WHERE id = %s",
+                (user_id,),
+            )
+        elif ptype == "unban":
+            cur.execute(
+                "UPDATE users SET status = 'active', banned_until = NULL, updated_at = NOW() WHERE id = %s",
+                (user_id,),
+            )
+            cur.execute("DELETE FROM user_permission_bans WHERE user_id = %s", (user_id,))
+        elif ptype == "restore":
+            cur.execute(
+                "DELETE FROM user_permission_bans WHERE user_id = %s AND permission_key = %s",
+                (user_id, perm_key),
+            )
+
+    _audit(
+        f"user.punish.{ptype}",
+        target_type="user",
+        target_id=user_id,
+        detail=f"{ptype} on {user['username']}"
+        + (f" ({reason})" if reason else "")
+        + (f" until {expires_at.isoformat()}" if expires_at else "")
+        + (f" perm={perm_key}" if perm_key else ""),
     )
-    if ptype == "revoke":
-        db.execute(
-            "INSERT INTO user_permission_bans (user_id, permission_key, reason) "
-            "VALUES (%s, %s, %s) ON CONFLICT (user_id, permission_key) "
-            "DO UPDATE SET reason = EXCLUDED.reason",
-            (user_id, perm_key, reason),
-        )
-    elif ptype == "temp_ban":
-        db.execute(
-            "UPDATE users SET status = 'banned', banned_until = %s, updated_at = NOW() WHERE id = %s",
-            (expires_at, user_id),
-        )
-    elif ptype == "ban":
-        db.execute(
-            "UPDATE users SET status = 'banned', banned_until = NULL, updated_at = NOW() WHERE id = %s",
-            (user_id,),
-        )
-    elif ptype == "unban":
-        db.execute(
-            "UPDATE users SET status = 'active', banned_until = NULL, updated_at = NOW() WHERE id = %s",
-            (user_id,),
-        )
-        db.execute("DELETE FROM user_permission_bans WHERE user_id = %s", (user_id,))
-    elif ptype == "restore":
-        db.execute(
-            "DELETE FROM user_permission_bans WHERE user_id = %s AND permission_key = %s",
-            (user_id, perm_key),
-        )
 
     if ptype == "temp_ban":
         flash(f"已暂时封禁 {user['username']} {hours:g} 小时。", "success")
@@ -1502,14 +1545,53 @@ def user_reset_pin(user_id):
 @login_required
 @require_capability(CAP_USERS_WRITE)
 def user_delete(user_id):
-    if user_id == session.get("admin_id"):
-        # admin_id is the admin_accounts id, not the users table id
-        pass
-    user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
+    """Soft-delete a user, matching the server's account-deletion lifecycle.
+
+    This route used to run a plain DELETE FROM users. The server models account
+    deletion as a soft delete (users.deleted_at) with a grace period, after which
+    a background purge removes the data — RequestAccountDeletion and
+    ListPurgeableUsers in pkg/repository/session.go. Hard-deleting from the panel
+    bypassed that lifecycle entirely: the row vanished immediately with no grace
+    period and no recovery, and any plain DELETE of the row left the dependent
+    rows (sessions, posts, attachments, ...) dangling.
+
+    The self-deletion guard was also a no-op — `if user_id ==
+    session.get("admin_id"): pass` compared a users.id against an
+    admin_accounts.id, which are unrelated sequences, and then did nothing in
+    either case. The panel session holds an admin account, not an application
+    user, so there is no legitimate "current user" to compare against here; the
+    operation is simply recorded against the acting administrator instead.
+    """
+    user = db.fetch_one(
+        "SELECT id, username, deleted_at FROM users WHERE id = %s", (user_id,)
+    )
     if not user:
         abort(404)
-    db.execute("DELETE FROM users WHERE id = %s", (user_id,))
-    flash("User deleted.", "success")
+
+    if user["deleted_at"] is not None:
+        flash("该账号已处于删除宽限期，无需重复删除。", "info")
+        return redirect(url_for("users"))
+
+    # Soft delete: mark it, and drop the refresh tokens so access ends
+    # immediately rather than at natural token expiry.
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE users SET deleted_at = NOW(), updated_at = NOW() "
+            "WHERE id = %s AND deleted_at IS NULL",
+            (user_id,),
+        )
+        cur.execute("DELETE FROM refresh_tokens WHERE user_id = %s", (user_id,))
+
+    _audit(
+        "user.delete",
+        target_type="user",
+        target_id=user_id,
+        detail=f"soft-deleted {user['username']} (grace period before purge)",
+    )
+    flash(
+        f"已标记删除 '{user['username']}'（软删除，宽限期结束后由服务端清理数据）。",
+        "success",
+    )
     return redirect(url_for("users"))
 
 
@@ -1661,19 +1743,46 @@ def group_create():
 @login_required
 @require_capability(CAP_USERS_GROUPS)
 def group_permissions(group_id):
-    group = db.fetch_one("SELECT id, name FROM groups WHERE id = %s", (group_id,))
+    group = db.fetch_one(
+        "SELECT id, name, is_default FROM groups WHERE id = %s", (group_id,)
+    )
     if not group:
         abort(404)
     keys = request.form.getlist("permission_keys")
     # only keep keys that actually exist
     valid = {r["key"] for r in db.fetch_all("SELECT key FROM permissions")}
     keys = [k for k in keys if k in valid]
-    db.execute("DELETE FROM group_permissions WHERE group_id = %s", (group_id,))
-    for k in keys:
-        db.execute(
-            "INSERT INTO group_permissions (group_id, permission_key) VALUES (%s, %s)",
-            (group_id, k),
+
+    # The default group ("所有人") is granted to every user implicitly, so its
+    # permission set is the floor that applies to everyone. Clearing it is
+    # equivalent to revoking a permission globally, and an empty submission is
+    # far more likely to be a mistake or a replayed request than an intent to
+    # strip all baseline access. The member-removal and group-deletion routes
+    # already refuse to touch the default group; this one did not.
+    if group["is_default"] and not keys:
+        flash(
+            "默认组「所有人」的权限不能清空。请至少保留一项权限。",
+            "error",
         )
+        return redirect(url_for("groups"))
+
+    # Replace the set atomically. Previously the DELETE committed on its own
+    # connection and each INSERT on another, so any failure in the loop left the
+    # group with a partial (or empty) permission set and no way to tell.
+    with db.transaction() as cur:
+        cur.execute("DELETE FROM group_permissions WHERE group_id = %s", (group_id,))
+        for k in keys:
+            cur.execute(
+                "INSERT INTO group_permissions (group_id, permission_key) VALUES (%s, %s)",
+                (group_id, k),
+            )
+
+    _audit(
+        "group.permissions",
+        target_type="group",
+        target_id=group_id,
+        detail=f"{group['name']}: {len(keys)} permission(s): {','.join(sorted(keys)) or '(none)'}",
+    )
     flash(f"Permissions for '{group['name']}' updated.", "success")
     return redirect(url_for("groups"))
 

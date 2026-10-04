@@ -59,6 +59,29 @@ def advisory_lock(lock_id):
         conn.close()
 
 
+@contextlib.contextmanager
+def transaction():
+    """Run several statements atomically.
+
+    Every other helper here opens its own autocommit connection, so a handler
+    that ran two statements — a punishment row plus its side effects, a DELETE
+    plus the replacement INSERTs — left a window where a failure between them
+    committed half the change. Code inside this block must use the yielded
+    cursor, not the module-level execute(), to stay in the transaction.
+    """
+    conn = get_conn()
+    conn.autocommit = False
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            yield cur
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
 def fetch_all(query, args=None):
     conn = get_conn()
     try:
@@ -179,6 +202,18 @@ def init_admin_table():
                 ON admin_audit_log (created_at DESC)
             """
         )
+        # Panel attribution for punishments.
+        #
+        # user_punishments.operator_id is a foreign key to users(id) — the
+        # *application* user table — so it cannot hold an admin_accounts id, and
+        # the panel used to hardcode NULL, leaving every punishment it recorded
+        # unattributed. Record the acting administrator's name separately, the
+        # same way wallet_transactions.operator_username already works.
+        if fetch_one("SELECT to_regclass('public.user_punishments') AS t")["t"]:
+            execute(
+                "ALTER TABLE user_punishments ADD COLUMN IF NOT EXISTS "
+                "operator_username VARCHAR(255) NOT NULL DEFAULT ''"
+            )
         # User-verification columns only make sense once the OpenField schema (and
         # the users table) exists; on a brand-new database this runs after the Go
         # server migrations have initialized the schema.
