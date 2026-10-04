@@ -54,9 +54,45 @@ def missing_credentials():
 #   1. ADMIN_SECRET_KEY environment variable;
 #   2. a random key persisted to .secret_key next to this file on first run
 #      (kept out of version control via .gitignore).
+def secret_key_problem(value):
+    """Return a message when a session-signing key is too weak, else None.
+
+    Mirrors the strength requirements the Go services apply, so the panel does
+    not become the weakest component by accepting a key they would reject.
+    """
+    if len(value) < 32:
+        return f"长度至少 32 个字符（当前 {len(value)}）。"
+    if len(value) > 512:
+        return "长度最多 512 个字符。"
+    if value.strip() != value:
+        return "首尾不能有空白字符。"
+    if len(set(value)) < 8:
+        return "字符种类过少，随机性不足。"
+    lowered = value.lower()
+    for weak in ("changeme", "change-me", "secret", "password", "example", "default", "admin"):
+        if weak in lowered:
+            return f"包含常见弱口令片段 '{weak}'。"
+    return None
+
+
 def _load_or_create_secret_key():
     env = os.getenv("ADMIN_SECRET_KEY", "").strip()
     if env:
+        # Validate the supplied key rather than trusting it.
+        #
+        # This value signs the session cookie, so a short or predictable key lets
+        # anyone forge an administrator cookie and skip the login form entirely.
+        # The Go services in this project enforce a strong key and refuse weak
+        # ones, so accepting "abc" here was the asymmetric weak link. An operator
+        # who sets the variable at all has opted into managing this secret, so a
+        # rejected value is a startup error they can act on — unlike the
+        # unset case, where generating a key is the helpful behaviour.
+        problem = secret_key_problem(env)
+        if problem is not None:
+            raise SystemExit(
+                f"ADMIN_SECRET_KEY 无效：{problem}\n"
+                "该密钥用于签名管理员会话 cookie，强度不足时任何人都可伪造登录态。"
+            )
         return env
 
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".secret_key")
@@ -72,14 +108,38 @@ def _load_or_create_secret_key():
 
     generated = secrets.token_urlsafe(48)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    fd = os.open(path, flags, 0o600)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except FileExistsError:
+        # Another process won the race between the read above and this create;
+        # read its key back rather than failing to start.
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        # The directory is read-only, or the key file is not writable by this
+        # user, and no environment variable supplied a key.
+        #
+        # This used to be unreachable: the handler caught FileExistsError, which
+        # os.open with O_CREAT|O_EXCL never raises here, while the real failure —
+        # a PermissionError — propagated and the panel could not start at all,
+        # with a traceback that did not mention ADMIN_SECRET_KEY. Generating an
+        # ephemeral key keeps the panel usable; every login session simply ends
+        # when the process restarts, and we say so loudly.
+        import warnings
+
+        warnings.warn(
+            "无法写入 .secret_key，且未设置 ADMIN_SECRET_KEY。本次运行使用临时会话密钥："
+            "重启面板后所有登录会话都会失效。请设置 ADMIN_SECRET_KEY 或使该目录可写。",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return generated
+
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(generated)
-    except FileExistsError:
-        # Another process won the race; read its key back.
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read().strip()
+    except OSError:
+        pass
     return generated
 
 

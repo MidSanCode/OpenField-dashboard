@@ -128,7 +128,12 @@
       <i class="bi bi-exclamation-triangle-fill fs-5"></i>
       <div>
         {% if db_status.error %}
-          <strong>数据库连接异常：</strong>{{ db_status.error }}
+          {# The raw driver error is not shown: libpq's message names the host,
+             port, role and database, and this banner renders on the LOGIN page to
+             anyone who can reach the panel, authenticated or not. The detail is
+             already in the panel log, and the operator can reach the database
+             page once signed in. #}
+          <strong>数据库连接异常：</strong>无法连接数据库，请检查服务是否已启动。
         {% else %}
           <strong>数据库缺少内容：</strong>以下数据表不存在：{{ db_status.missing|join('、') }}
         {% endif %}

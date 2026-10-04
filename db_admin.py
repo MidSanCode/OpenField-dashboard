@@ -136,7 +136,28 @@ def contains_meta_command(sql_text):
 
 
 def _pg_env():
-    env = dict(os.environ)
+    # Hand the child a minimal environment instead of inheriting the panel's.
+    #
+    # dict(os.environ) gave every psql invocation the panel's ADMIN_SECRET_KEY —
+    # the key that signs the session cookie, so holding it means forging an
+    # administrator login — along with ADMIN_DB_PASSWORD and anything else the
+    # operator happened to export. A child process needs PATH to be found, a
+    # locale, and the connection details passed below; psql has no use for the
+    # session key and no reason to be able to read it.
+    env = {
+        key: os.environ[key]
+        for key in (
+            "PATH",
+            "SYSTEMROOT",
+            "SystemRoot",
+            "TEMP",
+            "TMP",
+            "TMPDIR",
+            "LANG",
+            "LC_ALL",
+        )
+        if key in os.environ
+    }
     env["PGPASSWORD"] = config.DB_PASSWORD
     env["PGCLIENTENCODING"] = "UTF8"
     return env
@@ -165,8 +186,68 @@ def _truncate(text):
 
 
 def _sanitize_error(text):
-    """Strip host paths from a tool's error output before showing it."""
-    text = re.sub(r"(/[\w./-]+|[A-Za-z]:\\\\[\w.\\\\ -]+)", "<path>", text)
+    """Reduce a tool's stderr to what is safe to show an operator.
+
+    Tool output was rendered into a flash message almost verbatim. It routinely
+    contains the filesystem layout, the database host, port and role, and on a
+    failure the offending SQL with its literal values — which can include user
+    data. The previous pattern also mis-encoded Windows paths (\\\\ in a raw
+    string matches two literal backslashes, so single ones were untouched).
+
+    This is a screen, not a redaction guarantee: the goal is that a routine
+    failure does not hand out infrastructure detail or row contents, and that a
+    short explanatory line survives.
+    """
+    if not text:
+        return ""
+
+    # Connection strings and URLs, which carry host, port, role and password.
+    text = re.sub(
+        r"\b\w+://[^\s\"']*", "<connection>", text, flags=re.IGNORECASE
+    )
+    text = re.sub(r"\bPGPASSWORD=\S+", "PGPASSWORD=<hidden>", text)
+
+    # Filesystem paths, POSIX and Windows forms.
+    text = re.sub(r"[A-Za-z]:\\[^\s\"'<>|]*", "<path>", text)
+    text = re.sub(r"(?<![\w])/(?:[\w.+-]+/)*[\w.+-]+", "<path>", text)
+
+    # Host/port/role/database as psql and libpq phrase them. psql writes these as
+    # prose ("connection to server at "HOST", port N failed"), so match the quoted
+    # value and the port clause rather than only key=value forms.
+    text = re.sub(r'"\s*\d{1,3}(?:\.\d{1,3}){3}\s*"', '"<host>"', text)
+    text = re.sub(
+        r'\bat\s+"[^"]*"', 'at "<host>"', text, flags=re.IGNORECASE
+    )
+    text = re.sub(
+        r"\bport\s+\d+", "port <hidden>", text, flags=re.IGNORECASE
+    )
+    text = re.sub(
+        r"\b(host|port|user|password|dbname|database)\s*[=:]\s*\S+",
+        r"\1=<hidden>",
+        text,
+        flags=re.IGNORECASE,
+    )
+    # A bare hostname or IP left anywhere else, e.g. "database \u0022openfield\u0022 on host db.internal".
+    text = re.sub(
+        r"\b((?:\d{1,3}\.){3}\d{1,3})\b", "<host>", text
+    )
+
+    # SQL keywords introducing statements the tool echoed back. Keep a generic
+    # note that a statement failed, drop the statement and its literals.
+    if re.search(
+        r"\b(INSERT|UPDATE|DELETE|SELECT|COPY|ALTER|CREATE|DROP|TRUNCATE)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        text = re.sub(
+            r"(?is)\b(INSERT|UPDATE|DELETE|SELECT|COPY|ALTER|CREATE|DROP|TRUNCATE)\b.*",
+            "（SQL 语句内容已隐藏）",
+            text,
+            count=1,
+        )
+
+    # Collapse repeated whitespace so the flash message stays readable.
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
     return _truncate(text)
 
 

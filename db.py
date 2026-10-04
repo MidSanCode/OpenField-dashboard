@@ -277,6 +277,13 @@ def _check_schema():
         conn = get_conn()
     except psycopg2.Error as e:
         return {"ok": False, "missing": [], "error": str(e)}
+    except Exception as e:
+        # Anything else — a driver-level failure that is not a psycopg2.Error, a
+        # missing configuration value, a bug in get_conn — must not escape.
+        # schema_status runs from a template context processor, so an exception
+        # here breaks rendering for EVERY page of the panel, including the login
+        # form, turning a database problem into a completely unusable UI.
+        return {"ok": False, "missing": [], "error": str(e)}
     try:
         missing = []
         with conn.cursor() as cur:
@@ -287,6 +294,8 @@ def _check_schema():
                     missing.append(table)
         return {"ok": not missing, "missing": missing, "error": None}
     except psycopg2.Error as e:
+        return {"ok": False, "missing": [], "error": str(e)}
+    except Exception as e:
         return {"ok": False, "missing": [], "error": str(e)}
     finally:
         try:

@@ -1,3 +1,11 @@
-Flask>=3.0
-psycopg2-binary>=2.9
-bcrypt>=4.0
+# Direct dependencies, version-locked to what the panel is tested against.
+#
+# These were lower-bound only (>=) and reinstalled from the network on every
+# start, so two deployments of the same commit could run different code, and a
+# compromised or simply broken release published upstream would be picked up
+# silently — the panel has no lock file, so nothing pinned or verified what was
+# installed. Exact pins make a deployment reproducible; the start scripts no
+# longer install on every launch, so upgrading is a deliberate act.
+Flask==3.1.3
+psycopg2-binary==2.9.12
+bcrypt==4.3.0
