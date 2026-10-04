@@ -71,6 +71,11 @@ CAP_ADMINS_MANAGE = "admins.manage"          # manage panel accounts
 # listing. Enforce the application's own rule at every panel writer so a name
 # with quotes, angle brackets or spaces can no longer be stored from here.
 USERNAME_RE = re.compile(r"^[a-z0-9_]{3,32}$")
+# Payment PINs must be ASCII digits. str.isdigit() accepts Arabic-Indic and other
+# Unicode digits, which bcrypt would store into pin_hash even though the server
+# compares the submitted PIN as an ASCII string — leaving the account with a PIN
+# that can never verify. Defined once, here, rather than re-declared mid-module.
+PIN_RE = re.compile(r"^[0-9]{6}$")
 
 ALL_CAPABILITIES = (
     CAP_USERS_CREDENTIALS,
@@ -1574,15 +1579,29 @@ def user_reset_password(user_id):
         password_hash = bcrypt.hashpw(
             password.encode("utf-8"), bcrypt.gensalt()
         ).decode("utf-8")
-        db.execute(
-            "UPDATE users SET password_hash = %s, updated_at = NOW() WHERE id = %s",
-            (password_hash, user_id),
+        # Rotating a password must end the sessions that were opened with the
+        # old one. Refresh tokens are valid for 30 days and are stored
+        # independently of the password (refresh_tokens, pkg/repository/
+        # session.go), so without this an operator resetting a compromised
+        # account's password left the attacker's session working for another
+        # month — the reset looked like it worked and had no effect on access.
+        with db.transaction() as cur:
+            cur.execute(
+                "UPDATE users SET password_hash = %s, updated_at = NOW() WHERE id = %s",
+                (password_hash, user_id),
+            )
+            cur.execute("DELETE FROM refresh_tokens WHERE user_id = %s", (user_id,))
+        _audit(
+            "user.password_reset",
+            target_type="user",
+            target_id=user_id,
+            detail=f"reset password for {user['username']}; sessions revoked",
         )
-        flash(f"Password for '{user['username']}' updated.", "success")
+        flash(
+            f"Password for '{user['username']}' updated; existing sessions revoked.",
+            "success",
+        )
     return redirect(url_for("users"))
-
-
-USERNAME_RE = re.compile(r"^[a-z0-9_]{3,32}$")
 
 
 @app.route("/users/<int:user_id>/rename", methods=["POST"])
@@ -1619,13 +1638,29 @@ def user_reset_pin(user_id):
     if not user:
         abort(404)
     pin = (request.form.get("pin") or "").strip()
-    if not (pin.isdigit() and len(pin) == 6):
-        flash("支付PIN必须是6位数字。", "error")
+    # str.isdigit() is true for non-ASCII digits — Arabic-Indic '٣', Devanagari
+    # '३', superscripts like '²' — which bcrypt happily hashes into pin_hash.
+    # The client posts PIN digits from an ASCII keypad and the server compares
+    # them as an ASCII string, so a PIN stored from those codepoints can never be
+    # verified: the account is left with a payment PIN that always fails, with no
+    # way to tell from the panel that anything went wrong. Require ASCII digits.
+    if not PIN_RE.match(pin):
+        flash("支付PIN必须是6位ASCII数字（0-9）。", "error")
         return redirect(url_for("users"))
+
+    # Replacing someone's payment PIN is a credential change on their account,
+    # so it is recorded: the panel had no audit log at all before this round,
+    # which meant an administrator could reset a PIN and leave no trace.
     pin_hash = bcrypt.hashpw(pin.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     db.execute(
         "UPDATE users SET pin_hash = %s, updated_at = NOW() WHERE id = %s",
         (pin_hash, user_id),
+    )
+    _audit(
+        "user.reset_pin",
+        target_type="user",
+        target_id=user_id,
+        detail=f"reset payment PIN for {user['username']}",
     )
     flash(f"已重置 '{user['username']}' 的支付PIN。", "success")
     return redirect(url_for("users"))
