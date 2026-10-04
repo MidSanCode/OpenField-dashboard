@@ -440,6 +440,22 @@ def _client_ip():
     return request.remote_addr
 
 
+def _page_param(name="page", default=1, maximum=100000):
+    """Read a page number from the query string, clamped to a sane range.
+
+    Client-supplied page numbers feed straight into OFFSET, and PostgreSQL
+    produces and discards the skipped rows before returning any, so an unbounded
+    value such as ?page=999999999 makes the server walk an enormous number of
+    rows for a request that looks cheap. The floor keeps the arithmetic valid and
+    the ceiling keeps the cost finite.
+    """
+    try:
+        value = int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    return max(1, min(value, maximum))
+
+
 def _utcnow():
     """Current time as a timezone-aware UTC datetime.
 
@@ -1095,7 +1111,9 @@ def user_wallet_history(user_id):
         (user_id,),
     )["c"]
     total_pages = max(1, (total + per_page - 1) // per_page)
-    page = min(max(1, request.args.get("page", 1, type=int)), total_pages)
+    # Bounded by the real page count, and by _page_param's own ceiling so the
+    # floor is applied consistently before the two are combined.
+    page = min(_page_param(), total_pages)
     offset = (page - 1) * per_page
     txns = db.fetch_all(
         "SELECT id, amount, balance_after, type, description, operator_id, "
@@ -1860,7 +1878,7 @@ def user_unbind_oauth(user_id):
 @app.route("/posts")
 @login_required
 def posts():
-    page = max(1, request.args.get("page", 1, type=int))
+    page = _page_param()
     per_page = 20
     offset = (page - 1) * per_page
     rows = db.fetch_all(

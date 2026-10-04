@@ -113,6 +113,13 @@ DB_INIT_LOCK_ID = int(os.getenv("ADMIN_DB_INIT_LOCK_ID", "1207"))
 # default is generous. Raise ADMIN_MAX_CONTENT_LENGTH if an import needs more.
 MAX_CONTENT_LENGTH = int(os.getenv("ADMIN_MAX_CONTENT_LENGTH", str(512 * 1024 * 1024)))
 
+# Per-statement ceiling for every panel database connection, in milliseconds.
+#
+# A query that exceeds it is cancelled by PostgreSQL instead of holding its
+# connection until it completes, so one expensive page request cannot pin the
+# pool. Applied per connection in db.get_conn().
+DB_STATEMENT_TIMEOUT_MS = int(os.getenv("ADMIN_DB_STATEMENT_TIMEOUT_MS", "30000"))
+
 
 def dsn():
     """Build the libpq connection string.

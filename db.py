@@ -35,6 +35,19 @@ def connect():
 def get_conn():
     conn = connect()
     conn.autocommit = True
+    # Bound how long any single statement may run.
+    #
+    # Without a server-side timeout a slow query holds its connection until it
+    # finishes, and the panel's list pages issue several queries per request, so
+    # a client could pin the small pool by repeatedly asking for expensive pages.
+    # This is a per-session setting: it applies to every statement on this
+    # connection and disappears with it.
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SET statement_timeout = %s", (config.DB_STATEMENT_TIMEOUT_MS,))
+    except psycopg2.Error:
+        # A server that rejects the setting must not stop the panel from working.
+        pass
     return conn
 
 
