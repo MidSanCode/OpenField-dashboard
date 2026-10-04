@@ -1530,9 +1530,46 @@ def group_delete(group_id):
 # ---------- plugin store ----------
 
 PLUGIN_MAX_BYTES = 5 * 1024 * 1024  # must match the Go service cap
+# Upper bound on the decompressed manifest. The 5MB upload cap bounds only the
+# COMPRESSED size, and deflate reaches roughly 1000:1, so a legal-looking
+# package expanded to gigabytes and json.loads copied it several more times —
+# enough to OOM the shared panel process. A real manifest is a few KB.
+PLUGIN_MAX_MANIFEST_BYTES = 256 * 1024
 _PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{2,63}$")
 _PLUGIN_VERSION_RE = re.compile(r"^\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$")
 _PLUGIN_PERM_RE = re.compile(r"^[a-z0-9]+(?:\.[a-z0-9_]+){0,3}$")
+
+
+def _read_member_bounded(zf, info, limit):
+    """Decompress a zip member, refusing to produce more than limit bytes.
+
+    Reads through the zip stream in bounded steps rather than calling
+    zf.read(), which materialises the whole member: the size recorded in the
+    central directory is attacker-controlled and must not be trusted. Returns
+    the bytes, or raises ValueError when the limit is exceeded or the member
+    is corrupt.
+    """
+    if info.file_size and info.file_size > limit:
+        raise ValueError(
+            f"插件包的 manifest.json 解压后过大（超过 {limit // 1024} KB）"
+        )
+    out = bytearray()
+    try:
+        with zf.open(info) as src:
+            while True:
+                chunk = src.read(64 * 1024)
+                if not chunk:
+                    break
+                out.extend(chunk)
+                if len(out) > limit:
+                    raise ValueError(
+                        f"插件包的 manifest.json 解压后过大（超过 {limit // 1024} KB）"
+                    )
+    except zipfile.BadZipFile:
+        # Corrupt member or a checksum mismatch: reject as a bad package
+        # rather than letting it surface as a 500.
+        raise ValueError("插件包已损坏或校验失败")
+    return bytes(out)
 
 
 def _plugin_data_dir():
@@ -1559,7 +1596,10 @@ def _read_bundle_manifest(file_storage):
     if not target:
         raise ValueError("插件包缺少根目录 manifest.json")
     try:
-        mf = json.loads(zf.read(target).decode("utf-8"))
+        raw_manifest = _read_member_bounded(
+            zf, zf.getinfo(target), PLUGIN_MAX_MANIFEST_BYTES
+        )
+        mf = json.loads(raw_manifest.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise ValueError("manifest.json 不是有效的 UTF-8 JSON")
     if not isinstance(mf, dict):
