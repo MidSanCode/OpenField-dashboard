@@ -2,15 +2,49 @@ import os
 
 DB_HOST = os.getenv("ADMIN_DB_HOST", "localhost")
 DB_PORT = int(os.getenv("ADMIN_DB_PORT", "5432"))
-DB_USER = os.getenv("ADMIN_DB_USER", "of-user")
-DB_PASSWORD = os.getenv("ADMIN_DB_PASSWORD", "of-user-1207")
+DB_USER = os.getenv("ADMIN_DB_USER", "")
+DB_PASSWORD = os.getenv("ADMIN_DB_PASSWORD", "")
 DB_NAME = os.getenv("ADMIN_DB_NAME", "openfield")
-DB_SSLMODE = os.getenv("ADMIN_DB_SSLMODE", "disable")
+DB_SSLMODE = os.getenv("ADMIN_DB_SSLMODE", "")
 
 RUSTFS_ENDPOINT = os.getenv("RUSTFS_ENDPOINT", "localhost:9000")
-RUSTFS_ACCESS_KEY = os.getenv("RUSTFS_ACCESS_KEY", "rustfsadmin")
-RUSTFS_SECRET_KEY = os.getenv("RUSTFS_SECRET_KEY", "rustfsadmin")
+RUSTFS_ACCESS_KEY = os.getenv("RUSTFS_ACCESS_KEY", "")
+RUSTFS_SECRET_KEY = os.getenv("RUSTFS_SECRET_KEY", "")
 RUSTFS_BUCKET = os.getenv("RUSTFS_BUCKET", "openfield")
+
+# Credentials deliberately have no built-in defaults.
+#
+# The panel used to fall back to ADMIN_DB_USER=of-user /
+# ADMIN_DB_PASSWORD=of-user-1207 and RUSTFS_ACCESS_KEY=RUSTFS_SECRET_KEY=
+# rustfsadmin, and to sslmode=disable. Those values were committed here and the
+# database password also appears in the Go server's tests, so any deployment
+# that simply forgot to set the variables connected to PostgreSQL in cleartext
+# with credentials published in a public repository. A missing credential is now
+# a startup error that names the variable, which is far better than silently
+# using a known password.
+#
+# sslmode is left unset by default so libpq's own default applies ("prefer"),
+# which attempts TLS and only falls back to cleartext when the server refuses —
+# unlike the old hardcoded "disable", which never tried TLS at all.
+
+
+def missing_credentials():
+    """Return the names of required credential variables that are unset.
+
+    An empty list means the configuration is complete. Callers report the list
+    rather than crashing deep inside a connection attempt, so the operator sees
+    exactly which variable to set.
+    """
+    required = {
+        "ADMIN_DB_USER": DB_USER,
+        "ADMIN_DB_PASSWORD": DB_PASSWORD,
+    }
+    # Object storage is optional: the panel works without it, so its credentials
+    # are only required when an endpoint is configured.
+    if RUSTFS_ENDPOINT:
+        required["RUSTFS_ACCESS_KEY"] = RUSTFS_ACCESS_KEY
+        required["RUSTFS_SECRET_KEY"] = RUSTFS_SECRET_KEY
+    return sorted(name for name, value in required.items() if not str(value).strip())
 
 # Flask session signing key.
 #
@@ -73,7 +107,19 @@ DB_INIT_LOCK_ID = int(os.getenv("ADMIN_DB_INIT_LOCK_ID", "1207"))
 
 
 def dsn():
-    return (
-        f"host={DB_HOST} port={DB_PORT} dbname={DB_NAME} "
-        f"user={DB_USER} password={DB_PASSWORD} sslmode={DB_SSLMODE}"
-    )
+    """Build the libpq connection string.
+
+    sslmode is omitted entirely when unset, so libpq's own default ("prefer",
+    which tries TLS first) applies. Emitting an empty sslmode= would be a syntax
+    error rather than a default.
+    """
+    parts = [
+        f"host={DB_HOST}",
+        f"port={DB_PORT}",
+        f"dbname={DB_NAME}",
+        f"user={DB_USER}",
+        f"password={DB_PASSWORD}",
+    ]
+    if str(DB_SSLMODE).strip():
+        parts.append(f"sslmode={DB_SSLMODE}")
+    return " ".join(parts)

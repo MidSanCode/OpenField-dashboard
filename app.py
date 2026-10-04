@@ -1751,4 +1751,13 @@ def plugin_delete(plugin_id):
 
 
 if __name__ == "__main__":
+    # Fail fast and loudly when credentials are missing, rather than falling
+    # back to the weak published defaults this panel used to ship.
+    _missing = config.missing_credentials()
+    if _missing:
+        raise SystemExit(
+            "管理员面板缺少必需的凭据环境变量 / missing required credentials: "
+            + ", ".join(_missing)
+            + "\n请在启动前设置这些变量（见 README）。"
+        )
     app.run(host="127.0.0.1", port=1343, debug=False)
