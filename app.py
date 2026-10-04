@@ -360,6 +360,22 @@ def _utcnow():
     return datetime.datetime.now(datetime.timezone.utc)
 
 
+def _is_usable_password_hash(value):
+    """Report whether a users.password_hash can actually authenticate.
+
+    The Go server verifies passwords with bcrypt.CompareHashAndPassword, so a
+    value that is not a bcrypt hash fails every login regardless of what the
+    user types. Treating any non-empty string as "has a password" would let an
+    operator unbind the last OAuth identity from an account whose hash is a
+    placeholder, locking it out permanently.
+    """
+    if not value:
+        return False
+    text = str(value).strip()
+    # bcrypt hashes look like $2a$/$2b$/$2y$ + cost + 53 salt/hash characters.
+    return bool(re.match(r"^\$2[aby]?\$\d{2}\$[./A-Za-z0-9]{53}$", text))
+
+
 def _audit(action, target_type="", target_id="", detail=""):
     """Record a privileged panel action in admin_audit_log.
 
@@ -1673,13 +1689,45 @@ def user_delete(user_id):
 @login_required
 @require_capability(CAP_USERS_CREDENTIALS)
 def user_unbind_oauth(user_id):
-    user = db.fetch_one("SELECT id FROM users WHERE id = %s", (user_id,))
+    user = db.fetch_one(
+        "SELECT id, username, password_hash, needs_registration, oauth2_provider "
+        "FROM users WHERE id = %s",
+        (user_id,),
+    )
     if not user:
         abort(404)
+
+    # An account needs at least one usable credential. Unbinding the last OAuth
+    # identity from an account with no password left it permanently unable to
+    # log in: the server authenticates by bcrypt-comparing password_hash
+    # (services/account/internal/handler/auth.go) or by an OAuth identity, and
+    # with both gone there is no route back in short of direct database surgery.
+    # Check that the stored hash is actually a bcrypt hash rather than merely
+    # non-empty — a placeholder would satisfy a truthiness test while still
+    # failing every login attempt.
+    has_password = _is_usable_password_hash(user.get("password_hash"))
+    provider = (user.get("oauth2_provider") or "").strip()
+    if not provider:
+        flash("该账号没有 OAuth 绑定。", "info")
+        return redirect(url_for("users"))
+    if not has_password:
+        flash(
+            "不能解绑最后一个登录凭据：该账号没有可用的密码，解绑后将永久无法登录。"
+            "请先为该账号设置密码。",
+            "error",
+        )
+        return redirect(url_for("users"))
+
     db.execute(
-        "UPDATE users SET oauth2_provider = '', oauth2_id = '', updated_at = NOW() "
-        "WHERE id = %s",
+        "UPDATE users SET oauth2_provider = '', oauth2_id = '', oauth2_username = '', "
+        "updated_at = NOW() WHERE id = %s",
         (user_id,),
+    )
+    _audit(
+        "user.unbind_oauth",
+        target_type="user",
+        target_id=user_id,
+        detail=f"{user['username']}: removed provider {user.get('oauth2_provider') or '(none)'}",
     )
     flash("OAuth binding removed.", "success")
     return redirect(url_for("users"))
