@@ -266,11 +266,47 @@ def handle_db_error(exc):
 
 # ---------- auth ----------
 
+def _session_admin():
+    """Resolve the cookie's admin_id to a live, enabled account.
+
+    Returns the admin row, or None when the session must be discarded. This is
+    the revalidation that flask_login_required previously skipped entirely: the
+    cookie asserted an admin_id and nothing ever checked that the account still
+    exists, is still enabled, or still carries the session version it was issued
+    with, so deleting or rotating an administrator's credentials left every
+    session they held fully usable for as long as the cookie survived.
+    """
+    admin_id = session.get("admin_id")
+    if admin_id is None:
+        return None
+    row = db.fetch_one(
+        "SELECT id, username, capabilities, session_version, disabled "
+        "FROM admin_accounts WHERE id = %s",
+        (admin_id,),
+    )
+    if row is None or row.get("disabled"):
+        return None
+    # A cookie without a version predates this check (or was forged without
+    # one); treat it as stale so such sessions are retired by the next login.
+    if session.get("session_version") != row["session_version"]:
+        return None
+    return row
+
+
 def login_required(view):
     @functools.wraps(view)
     def wrapped(*args, **kwargs):
         if session.get("admin_id") is None:
             return redirect(url_for("login"))
+        admin = _session_admin()
+        if admin is None:
+            # The account was deleted, disabled, or had its password rotated.
+            session.clear()
+            return redirect(url_for("login"))
+        # Keep the display name in step with the row: it was frozen at login, so
+        # audit entries written later could attribute an action to a stale name.
+        if admin["username"] != session.get("admin_username"):
+            session["admin_username"] = admin["username"]
         return view(*args, **kwargs)
 
     return wrapped
@@ -310,6 +346,34 @@ def _client_ip():
         if len(parts) >= _TRUSTED_PROXY_COUNT:
             return parts[-_TRUSTED_PROXY_COUNT]
     return request.remote_addr
+
+
+def _audit(action, target_type="", target_id="", detail=""):
+    """Record a privileged panel action in admin_audit_log.
+
+    Best-effort by design: a failure to write the trail must not abort the
+    action the operator just performed, but it is logged loudly so a silently
+    broken audit path is visible.
+    """
+    try:
+        db.execute(
+            """
+            INSERT INTO admin_audit_log
+                (actor_id, actor_username, action, target_type, target_id, detail, client_ip)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                session.get("admin_id"),
+                session.get("admin_username", "") or "",
+                action,
+                target_type or "",
+                str(target_id or ""),
+                detail or "",
+                (_client_ip() or "")[:64],
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - auditing must never break the action
+        app.logger.error("failed to write audit entry for %s: %s", action, exc)
 
 
 def _login_blocked(key):
@@ -371,16 +435,20 @@ def login():
             flash("尝试次数过多，请稍后再试。", "error")
             return render_template("login.html"), 429
         admin = db.fetch_one(
-            "SELECT id, username, password_hash FROM admin_accounts WHERE username = %s",
+            "SELECT id, username, password_hash, session_version, disabled "
+            "FROM admin_accounts WHERE username = %s",
             (username,),
         )
-        if admin and bcrypt.checkpw(
+        if admin and not admin.get("disabled") and bcrypt.checkpw(
             password.encode("utf-8"), admin["password_hash"].encode("utf-8")
         ):
             _login_reset(attempt_key)
             session.clear()  # rotate the session id on login (fixation defense)
             session["admin_id"] = admin["id"]
             session["admin_username"] = admin["username"]
+            # Bind the cookie to this account's current credential generation so
+            # a later password rotation can invalidate it.
+            session["session_version"] = admin["session_version"]
             return redirect(url_for("dashboard"))
         _login_record_failure(attempt_key)
         flash("Invalid username or password.", "error")
@@ -1118,7 +1186,7 @@ def user_punishment_history(user_id):
 @login_required
 def admins():
     admins = db.fetch_all(
-        "SELECT id, username, can_verify, capabilities, created_at "
+        "SELECT id, username, can_verify, capabilities, created_at, disabled, session_version "
         "FROM admin_accounts ORDER BY id ASC"
     )
     for a in admins:
@@ -1131,7 +1199,25 @@ def admins():
         admins=admins,
         all_capabilities=ALL_CAPABILITIES,
         capability_labels=CAPABILITY_LABELS,
+        password_policy_hint="至少 12 位，需同时包含字母与数字。",
     )
+
+
+@app.route("/audit")
+@login_required
+@require_capability(CAP_ADMINS_MANAGE)
+def audit_log():
+    """Recent privileged panel actions, newest first."""
+    try:
+        limit = max(1, min(int(request.args.get("limit", 200)), 1000))
+    except (TypeError, ValueError):
+        limit = 200
+    rows = db.fetch_all(
+        "SELECT created_at, actor_username, action, target_type, target_id, detail, client_ip "
+        "FROM admin_audit_log ORDER BY created_at DESC LIMIT %s",
+        (limit,),
+    )
+    return render_template("audit.html", entries=rows, limit=limit)
 
 
 @app.route("/admins/<int:admin_id>/capabilities", methods=["POST"])
@@ -1209,6 +1295,111 @@ def admin_can_verify(admin_id):
         )
     flash("Verifier permission updated.", "success")
     return redirect(url_for("admins"))
+
+
+def _revoke_sessions(admin_id):
+    """Invalidate every live session for an account.
+
+    Bumping session_version makes each existing cookie fail the check in
+    login_required on its next request. This is what makes a credential change
+    actually terminate access rather than leaving the old cookie usable.
+    """
+    db.execute(
+        "UPDATE admin_accounts SET session_version = session_version + 1 WHERE id = %s",
+        (admin_id,),
+    )
+
+
+@app.route("/admins/<int:admin_id>/password", methods=["POST"])
+@login_required
+@require_capability(CAP_ADMINS_MANAGE)
+def admin_set_password(admin_id):
+    """Rotate a panel account's password and end its live sessions."""
+    admin = db.fetch_one("SELECT id, username FROM admin_accounts WHERE id = %s", (admin_id,))
+    if not admin:
+        abort(404)
+
+    password = request.form.get("password", "")
+    confirm = request.form.get("password_confirm", "")
+    if password != confirm:
+        flash("两次输入的口令不一致。", "error")
+        return redirect(url_for("admins"))
+    problem = _password_policy_error(password)
+    if problem:
+        flash(problem, "error")
+        return redirect(url_for("admins"))
+
+    db.execute(
+        "UPDATE admin_accounts SET password_hash = %s WHERE id = %s",
+        (bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8"), admin_id),
+    )
+    _revoke_sessions(admin_id)
+    _audit(
+        "admin.password_rotate",
+        target_type="admin",
+        target_id=str(admin_id),
+        detail=f"rotated password for panel account {admin['username']}",
+    )
+    if admin_id == session.get("admin_id"):
+        # Our own session was just revoked; ask the operator to log in again
+        # rather than leaving them on a page that will redirect on next click.
+        session.clear()
+        flash("口令已更新，请重新登录。", "success")
+        return redirect(url_for("login"))
+    flash(f"已重置 {admin['username']} 的口令，其所有会话已失效。", "success")
+    return redirect(url_for("admins"))
+
+
+@app.route("/admins/<int:admin_id>/disabled", methods=["POST"])
+@login_required
+@require_capability(CAP_ADMINS_MANAGE)
+def admin_set_disabled(admin_id):
+    """Enable or disable a panel account, ending its sessions when disabled."""
+    admin = db.fetch_one("SELECT id, username FROM admin_accounts WHERE id = %s", (admin_id,))
+    if not admin:
+        abort(404)
+
+    disabled = request.form.get("disabled") == "1"
+    if disabled and admin_id == session.get("admin_id"):
+        flash("不能停用当前登录的账号。", "error")
+        return redirect(url_for("admins"))
+    # Disabling the last account that can manage panel accounts would lock every
+    # operator out permanently, the same hazard the capability check guards.
+    if disabled and not _other_admin_can_manage(admin_id):
+        flash("不能停用最后一个可管理面板账号的账号。", "error")
+        return redirect(url_for("admins"))
+
+    db.execute(
+        "UPDATE admin_accounts SET disabled = %s WHERE id = %s", (disabled, admin_id)
+    )
+    if disabled:
+        _revoke_sessions(admin_id)
+    _audit(
+        "admin.disable" if disabled else "admin.enable",
+        target_type="admin",
+        target_id=str(admin_id),
+        detail=f"{'disabled' if disabled else 'enabled'} panel account {admin['username']}",
+    )
+    flash("账号状态已更新。" + ("其所有会话已失效。" if disabled else ""), "success")
+    return redirect(url_for("admins"))
+
+
+def _password_policy_error(password):
+    """Return a message when a password is unacceptable, else None.
+
+    The seed script enforced nothing, so an administrator account could be
+    created with a one-character password; applying the same rule to rotation
+    keeps the two paths consistent.
+    """
+    if len(password) < 12:
+        return "口令至少需要 12 个字符。"
+    if len(password) > 256:
+        return "口令过长（最多 256 个字符）。"
+    if password.strip() != password:
+        return "口令首尾不能有空白字符。"
+    if not any(c.isalpha() for c in password) or not any(c.isdigit() for c in password):
+        return "口令需同时包含字母与数字。"
+    return None
 
 
 @app.route("/users/<int:user_id>/verified", methods=["POST"])

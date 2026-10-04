@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}操作审计 - OpenField Admin{% endblock %}
+{% block content %}
+<div class="d-flex align-items-center justify-content-between mb-3">
+  <h1 class="page-title mb-0">操作审计</h1>
+  <span class="text-muted small">最近 {{ entries|length }} 条（上限 {{ limit }}）</span>
+</div>
+
+<div class="card table-card">
+  <div class="table-responsive">
+    <table class="table table-sm align-middle">
+      <thead>
+        <tr>
+          <th>时间</th>
+          <th>操作者</th>
+          <th>动作</th>
+          <th>对象</th>
+          <th>详情</th>
+          <th>来源 IP</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for e in entries %}
+        <tr>
+          <td class="text-nowrap small">{{ e.created_at }}</td>
+          <td>{{ e.actor_username or '(已删除)' }}</td>
+          <td><code>{{ e.action }}</code></td>
+          <td class="small">
+            {% if e.target_type %}{{ e.target_type }}{% endif %}
+            {% if e.target_id %}#{{ e.target_id }}{% endif %}
+          </td>
+          <td class="small">{{ e.detail }}</td>
+          <td class="small text-muted">{{ e.client_ip }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="text-center text-muted py-4">暂无审计记录。</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

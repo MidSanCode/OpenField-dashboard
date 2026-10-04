@@ -14,6 +14,7 @@
           <th>ID</th>
           <th>用户名</th>
           <th>权限</th>
+          <th>口令与状态</th>
           <th>创建时间</th>
         </tr>
       </thead>
@@ -24,6 +25,7 @@
           <td class="fw-medium">
             {{ a.username }}
             {% if a.id == session.get('admin_id') %}<span class="badge bg-secondary ms-1">当前账号</span>{% endif %}
+            {% if a.disabled %}<span class="badge bg-danger ms-1">已停用</span>{% endif %}
           </td>
           <td>
             <form method="post" action="{{ url_for('admin_capabilities', admin_id=a.id) }}">
@@ -56,10 +58,33 @@
               </button>
             </form>
           </td>
+          <td>
+            <form method="post" action="{{ url_for('admin_set_password', admin_id=a.id) }}"
+                  class="d-flex flex-column gap-1 mb-2"
+                  data-confirm="确定重置 {{ a.username }} 的口令？该账号的所有已登录会话将立即失效。">
+              {{ csrf_input }}
+              <input type="password" class="form-control form-control-sm" name="password"
+                     placeholder="新口令" autocomplete="new-password" required>
+              <input type="password" class="form-control form-control-sm" name="password_confirm"
+                     placeholder="确认新口令" autocomplete="new-password" required>
+              <button type="submit" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-key me-1"></i>重置口令
+              </button>
+              <div class="form-text">{{ password_policy_hint }}</div>
+            </form>
+            <form method="post" action="{{ url_for('admin_set_disabled', admin_id=a.id) }}"
+                  data-confirm="确定{{ '启用' if a.disabled else '停用' }} {{ a.username }}？{{ '停用后其所有会话立即失效。' if not a.disabled else '' }}">
+              {{ csrf_input }}
+              <input type="hidden" name="disabled" value="{{ '0' if a.disabled else '1' }}">
+              <button type="submit" class="btn btn-sm {{ 'btn-outline-success' if a.disabled else 'btn-outline-danger' }}">
+                <i class="bi bi-{{ 'unlock' if a.disabled else 'lock' }} me-1"></i>{{ '启用账号' if a.disabled else '停用账号' }}
+              </button>
+            </form>
+          </td>
           <td class="text-muted">{{ a.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
         </tr>
         {% else %}
-        <tr><td colspan="4" class="text-center text-muted py-4">暂无管理员</td></tr>
+        <tr><td colspan="5" class="text-center text-muted py-4">暂无管理员</td></tr>
         {% endfor %}
       </tbody>
     </table>

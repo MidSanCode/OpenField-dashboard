@@ -133,6 +133,52 @@ def init_admin_table():
              WHERE COALESCE(capabilities, '') = '' AND can_verify = FALSE
             """
         )
+        # Session revocation counter.
+        #
+        # Flask's client-side sessions carry all authorization state, so an
+        # administrator whose password was rotated (or whose row was deleted)
+        # kept full panel access with the cookie already in hand — there was no
+        # way to invalidate a live session at all. Every login stamps the
+        # account's current session_version into the cookie, and login_required
+        # re-reads this column, so bumping it logs that account out everywhere.
+        execute(
+            """
+            ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS session_version BIGINT NOT NULL DEFAULT 0
+            """
+        )
+        execute(
+            """
+            ALTER TABLE admin_accounts ADD COLUMN IF NOT EXISTS disabled BOOLEAN NOT NULL DEFAULT FALSE
+            """
+        )
+        # Panel operation audit log.
+        #
+        # The panel performed privileged, irreversible actions — resetting an
+        # application user's password or payment PIN, adjusting a wallet,
+        # restoring a database dump, managing panel accounts — without recording
+        # who did what. The only trace was the wallet_transactions columns, which
+        # cover just one of those actions. This is the general trail.
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_audit_log (
+                id BIGSERIAL PRIMARY KEY,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                actor_id BIGINT,
+                actor_username VARCHAR(255) NOT NULL DEFAULT '',
+                action VARCHAR(100) NOT NULL,
+                target_type VARCHAR(50) NOT NULL DEFAULT '',
+                target_id VARCHAR(255) NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT '',
+                client_ip VARCHAR(64) NOT NULL DEFAULT ''
+            )
+            """
+        )
+        execute(
+            """
+            CREATE INDEX IF NOT EXISTS admin_audit_log_created_at_idx
+                ON admin_audit_log (created_at DESC)
+            """
+        )
         # User-verification columns only make sense once the OpenField schema (and
         # the users table) exists; on a brand-new database this runs after the Go
         # server migrations have initialized the schema.
