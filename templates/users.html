@@ -120,7 +120,7 @@
                   {% if u.oauth2_provider %}
                   <li>
                     <form method="post" action="{{ url_for('user_unbind_oauth', user_id=u.id) }}"
-                          onsubmit="return confirm('确认解绑 {{ u.username }} 的 {{ u.oauth2_provider }} 账号?')">{{ csrf_input }}
+                          data-confirm="确认解绑 {{ u.username }} 的 {{ u.oauth2_provider }} 账号?">{{ csrf_input }}
                       <button class="dropdown-item" type="submit">
                         <i class="bi bi-link-45deg me-2 text-warning"></i>解绑 OAuth（{{ u.oauth2_provider }}）
                       </button>
@@ -145,7 +145,7 @@
                   </li>
                   <li>
                     <form method="post" action="{{ url_for('user_delete', user_id=u.id) }}"
-                          onsubmit="return confirm('确认删除用户 {{ u.username }}? 其帖子与消息将一并删除。')">{{ csrf_input }}
+                          data-confirm="确认删除用户 {{ u.username }}? 其帖子与消息将一并删除。">{{ csrf_input }}
                       <button class="dropdown-item text-danger" type="submit">
                         <i class="bi bi-trash me-2"></i>删除用户
                       </button>

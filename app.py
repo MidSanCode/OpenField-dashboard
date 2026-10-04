@@ -64,6 +64,14 @@ CAP_SERVER_MANAGE = "server.manage"          # start/stop/build server processes
 CAP_PLUGINS_WRITE = "plugins.write"          # publish/unpublish plugins
 CAP_ADMINS_MANAGE = "admins.manage"          # manage panel accounts
 
+# Account names are written by several paths (this panel, the Go service's
+# password registration, and OIDC provisioning) into one shared column. The
+# panel previously validated only presence and uniqueness here, while
+# user_rename enforced a format rule, so an unrestricted name could reach the
+# listing. Enforce the application's own rule at every panel writer so a name
+# with quotes, angle brackets or spaces can no longer be stored from here.
+USERNAME_RE = re.compile(r"^[a-z0-9_]{3,32}$")
+
 ALL_CAPABILITIES = (
     CAP_USERS_CREDENTIALS,
     CAP_USERS_WRITE,
@@ -786,6 +794,12 @@ def user_new():
         role = request.form.get("role", "user")
         if not username or not nickname or not password:
             flash("Username, nickname and password are required.", "error")
+        elif not USERNAME_RE.match(username):
+            flash(
+                "Username must be 3-32 characters of lowercase letters, digits "
+                "or underscores.",
+                "error",
+            )
         elif db.fetch_one("SELECT id FROM users WHERE username = %s", (username,)):
             flash("Username already taken.", "error")
         else:

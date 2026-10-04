@@ -48,7 +48,7 @@
     <div class="ms-auto d-inline-flex gap-1">
       {% if not g.is_default %}
       <form method="post" action="{{ url_for('group_delete', group_id=g.id) }}"
-            onsubmit="return confirm('确认删除权限组 {{ g.name }}? 组内成员的权限将随之移除。')">{{ csrf_input }}
+            data-confirm="确认删除权限组 {{ g.name }}? 组内成员的权限将随之移除。">{{ csrf_input }}
         <button class="btn btn-sm btn-outline-danger" type="submit">
           <i class="bi bi-trash me-1"></i>删除
         </button>

@@ -74,7 +74,7 @@
             </form>
             {% endif %}
             <form method="post" action="{{ url_for('plugin_delete', plugin_id=p.id) }}" class="d-inline"
-                  onsubmit="return confirm('确认删除插件 {{ p.id }}？客户端已安装的副本不受影响。')">{{ csrf_input }}
+                  data-confirm="确认删除插件 {{ p.id }}？客户端已安装的副本不受影响。">{{ csrf_input }}
               <button class="btn btn-sm btn-outline-danger" type="submit" title="删除"><i class="bi bi-trash"></i></button>
             </form>
           </td>
