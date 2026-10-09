@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block title %}举报管理{% endblock %}
+{% block content %}
+<h2 class="page-title"><i class="bi bi-flag me-2 text-primary"></i>举报管理</h2>
+
+{# Filters are plain query parameters so the shared pagination partial can
+   preserve them across pages (it re-uses request.args minus `page`). #}
+<form class="card table-card mb-3" method="get" action="{{ url_for('reports') }}">
+  <div class="card-body d-flex flex-wrap align-items-end gap-3">
+    <div>
+      <label class="form-label small text-muted mb-1" for="status">状态</label>
+      <select class="form-select form-select-sm" id="status" name="status">
+        <option value="pending" {{ 'selected' if status == 'pending' }}>待处理</option>
+        <option value="reviewed" {{ 'selected' if status == 'reviewed' }}>已处理</option>
+        <option value="dismissed" {{ 'selected' if status == 'dismissed' }}>已驳回</option>
+        <option value="all" {{ 'selected' if status == 'all' }}>全部</option>
+      </select>
+    </div>
+    <div>
+      <label class="form-label small text-muted mb-1" for="target_type">举报对象</label>
+      <select class="form-select form-select-sm" id="target_type" name="target_type">
+        <option value="all" {{ 'selected' if target_type == 'all' }}>全部</option>
+        {% for t in target_types %}
+        <option value="{{ t }}" {{ 'selected' if target_type == t }}>{{ target_labels.get(t, t) }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <button class="btn btn-sm btn-primary" type="submit"><i class="bi bi-funnel me-1"></i>筛选</button>
+      <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('reports') }}">重置</a>
+    </div>
+  </div>
+</form>
+
+{% include "_pagination.html" %}
+
+<div class="card table-card">
+  <div class="table-responsive">
+    <table class="table align-middle">
+      <thead>
+        <tr>
+          <th>ID</th><th>举报人</th><th>对象</th><th>内容预览</th><th>理由</th>
+          <th>状态</th><th>处理</th><th>时间</th><th class="text-end">操作</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in reports %}
+        <tr>
+          <td class="text-muted">{{ r.id }}</td>
+          <td class="fw-medium">{{ r.reporter_name }}</td>
+          <td>
+            <span class="badge text-bg-light">{{ target_labels.get(r.target_type, r.target_type) }}</span>
+            <span class="text-muted small">#{{ r.target_id }}</span>
+          </td>
+          <td style="max-width: 320px;">
+            {% if r.target %}
+              {% if r.target_type == 'user' %}
+                <span class="fw-medium">{{ r.target.username }}</span>
+              {% else %}
+                <span style="display: inline-block; max-width: 320px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;">{{ r.target.content }}</span>
+              {% endif %}
+            {% else %}
+              <span class="badge text-bg-secondary" title="目标可能已被删除">已不存在</span>
+            {% endif %}
+          </td>
+          <td style="max-width: 240px;">
+            <span style="display: inline-block; max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;" title="{{ r.reason }}">{{ r.reason }}</span>
+          </td>
+          <td>
+            <span class="badge {{ 'badge-soft-admin' if r.status == 'pending' else ('text-bg-success' if r.status == 'reviewed' else 'text-bg-secondary') }}">
+              {{ status_labels.get(r.status, r.status) }}
+            </span>
+          </td>
+          <td class="small">
+            {% if r.status != 'pending' %}
+              <div class="text-muted">
+                {{ r.reviewer_username or '—' }}
+                {% if r.reviewed_at %}· {{ r.reviewed_at.strftime('%Y-%m-%d %H:%M') }}{% endif %}
+              </div>
+              {% if r.review_note %}<div class="text-muted" title="{{ r.review_note }}">{{ r.review_note }}</div>{% endif %}
+            {% else %}
+              <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ r.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td class="text-end" style="min-width: 280px;">
+            {% if r.status == 'pending' %}
+            <form method="post" action="{{ url_for('report_resolve', report_id=r.id) }}" class="d-flex gap-1 justify-content-end">
+              {{ csrf_input }}
+              <input type="hidden" name="status_filter" value="{{ status }}">
+              <input type="hidden" name="target_type_filter" value="{{ target_type }}">
+              {% if page > 1 %}<input type="hidden" name="page_filter" value="{{ page }}">{% endif %}
+              <input class="form-control form-control-sm" name="review_note" maxlength="500" placeholder="处理备注（可选）" style="max-width: 150px;">
+              <select class="form-select form-select-sm" name="status" style="max-width: 100px;">
+                <option value="reviewed">已处理</option>
+                <option value="dismissed">已驳回</option>
+              </select>
+              <button class="btn btn-sm btn-outline-primary" type="submit" title="提交处理结果">
+                <i class="bi bi-check2"></i>
+              </button>
+            </form>
+            {% else %}
+            <form method="post" action="{{ url_for('report_reopen', report_id=r.id) }}" class="d-inline"
+                  data-confirm="确认重新打开举报 #{{ r.id }}？">
+              {{ csrf_input }}
+              <input type="hidden" name="status_filter" value="{{ status }}">
+              <input type="hidden" name="target_type_filter" value="{{ target_type }}">
+              {% if page > 1 %}<input type="hidden" name="page_filter" value="{{ page }}">{% endif %}
+              <button class="btn btn-sm btn-outline-secondary" type="submit" title="重新打开">
+                <i class="bi bi-arrow-counterclockwise"></i>
+              </button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center text-muted py-4">暂无举报</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

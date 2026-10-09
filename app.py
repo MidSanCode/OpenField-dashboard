@@ -173,6 +173,7 @@ CAP_DB_BACKUP = "db.backup"                  # export/download/delete dumps
 CAP_SERVER_MANAGE = "server.manage"          # start/stop/build server processes
 CAP_PLUGINS_WRITE = "plugins.write"          # publish/unpublish plugins
 CAP_ADMINS_MANAGE = "admins.manage"          # manage panel accounts
+CAP_REPORTS_MANAGE = "reports.manage"        # review the moderation report queue
 
 # Account names are written by several paths (this panel, the Go service's
 # password registration, and OIDC provisioning) into one shared column. The
@@ -207,6 +208,7 @@ ALL_CAPABILITIES = (
     CAP_SERVER_MANAGE,
     CAP_PLUGINS_WRITE,
     CAP_ADMINS_MANAGE,
+    CAP_REPORTS_MANAGE,
 )
 
 # Human-readable labels for the account-management UI.
@@ -221,6 +223,7 @@ CAPABILITY_LABELS = {
     CAP_SERVER_MANAGE: "启停与构建服务进程",
     CAP_PLUGINS_WRITE: "发布/下架插件",
     CAP_ADMINS_MANAGE: "管理面板账号",
+    CAP_REPORTS_MANAGE: "审核举报",
 }
 
 
@@ -2051,6 +2054,188 @@ def post_delete(post_id):
     db.execute("DELETE FROM posts WHERE id = %s", (post_id,))
     flash("Post deleted.", "success")
     return redirect(url_for("posts"))
+
+
+# ---------- moderation reports ----------
+
+REPORT_STATUSES = ("pending", "reviewed", "dismissed")
+REPORT_TARGET_TYPES = ("post", "message", "user")
+REPORT_STATUS_LABELS = {"pending": "待处理", "reviewed": "已处理", "dismissed": "已驳回"}
+REPORT_TARGET_LABELS = {"post": "帖子", "message": "聊天消息", "user": "用户"}
+REPORTS_PER_PAGE = 25
+
+
+def _reports_filter():
+    """Read the queue filters from the query string.
+
+    Returns (where_sql, params, status, target_type). An unrecognised value
+    degrades to the default instead of erroring, so a hand-edited URL can
+    neither 500 nor silently widen the query.
+    """
+    status = (request.args.get("status") or "pending").strip()
+    if status not in REPORT_STATUSES and status != "all":
+        status = "pending"
+    target_type = (request.args.get("target_type") or "all").strip()
+    if target_type not in REPORT_TARGET_TYPES and target_type != "all":
+        target_type = "all"
+
+    clauses = []
+    params = []
+    if status != "all":
+        clauses.append("r.status = %s")
+        params.append(status)
+    if target_type != "all":
+        clauses.append("r.target_type = %s")
+        params.append(target_type)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    return where, params, status, target_type
+
+
+def _reports_redirect_args():
+    """Carry the active filters back to the queue after a POST.
+
+    Filters arrive as query parameters on the GET and as hidden form fields on
+    the action forms, so both sources are consulted.
+    """
+    args = {}
+    status = (request.args.get("status") or request.form.get("status_filter") or "").strip()
+    if status:
+        args["status"] = status
+    target_type = (request.args.get("target_type") or request.form.get("target_type_filter") or "").strip()
+    if target_type:
+        args["target_type"] = target_type
+    page = request.args.get("page") or request.form.get("page_filter")
+    if page:
+        args["page"] = page
+    return args
+
+
+def _attach_report_targets(rows):
+    """Load the reported content for a page of reports.
+
+    reports is polymorphic (target_type/target_id with no foreign key), so
+    each kind is resolved with one ANY(...) query and stitched in by id: three
+    round trips per page rather than one per row (the N+1 pattern this panel
+    already had to fix on the groups page).
+    """
+    ids = {"post": [], "message": [], "user": []}
+    for row in rows:
+        if row["target_type"] in ids:
+            ids[row["target_type"]].append(row["target_id"])
+
+    found = {"post": {}, "message": {}, "user": {}}
+    if ids["post"]:
+        for r in db.fetch_all(
+            "SELECT id, user_id, content FROM posts WHERE id = ANY(%s)", (ids["post"],)
+        ):
+            found["post"][r["id"]] = r
+    if ids["message"]:
+        for r in db.fetch_all(
+            "SELECT id, sender_id, content FROM messages WHERE id = ANY(%s)", (ids["message"],)
+        ):
+            found["message"][r["id"]] = r
+    if ids["user"]:
+        for r in db.fetch_all(
+            "SELECT id, username FROM users WHERE id = ANY(%s)", (ids["user"],)
+        ):
+            found["user"][r["id"]] = r
+
+    for row in rows:
+        kind = row["target_type"]
+        row["target"] = found.get(kind, {}).get(row["target_id"])
+    return rows
+
+
+@app.route("/reports")
+@login_required
+@require_capability(CAP_REPORTS_MANAGE)
+def reports():
+    page = _page_param()
+    offset = (page - 1) * REPORTS_PER_PAGE
+    where, params, status, target_type = _reports_filter()
+
+    total = db.fetch_one("SELECT COUNT(*) AS c FROM reports r" + where, tuple(params))["c"]
+    rows = db.fetch_all(
+        "SELECT r.id, r.reporter_id, r.target_type, r.target_id, r.reason, r.status, "
+        "       r.reviewer_username, r.review_note, r.created_at, r.reviewed_at, "
+        "       u.username AS reporter_name "
+        "FROM reports r JOIN users u ON u.id = r.reporter_id" + where +
+        # Pending first: the queue is worked oldest-first within each status.
+        " ORDER BY (r.status = 'pending') DESC, r.created_at DESC LIMIT %s OFFSET %s",
+        tuple(params) + (REPORTS_PER_PAGE, offset),
+    )
+    _attach_report_targets(rows)
+    return render_template(
+        "reports.html",
+        reports=rows,
+        page=page,
+        per_page=REPORTS_PER_PAGE,
+        total=total,
+        total_pages=max(1, (total + REPORTS_PER_PAGE - 1) // REPORTS_PER_PAGE),
+        status=status,
+        target_type=target_type,
+        statuses=REPORT_STATUSES,
+        target_types=REPORT_TARGET_TYPES,
+        status_labels=REPORT_STATUS_LABELS,
+        target_labels=REPORT_TARGET_LABELS,
+    )
+
+
+@app.route("/reports/<int:report_id>/resolve", methods=["POST"])
+@login_required
+@require_capability(CAP_REPORTS_MANAGE)
+def report_resolve(report_id):
+    report = db.fetch_one("SELECT id FROM reports WHERE id = %s", (report_id,))
+    if not report:
+        abort(404)
+    status = request.form.get("status", "").strip()
+    if status not in ("reviewed", "dismissed"):
+        flash("请选择处理结果（已处理 / 已驳回）。", "error")
+        return redirect(url_for("reports", **_reports_redirect_args()))
+    note = request.form.get("review_note", "").strip()[:500]
+    db.execute(
+        "UPDATE reports SET status = %s, reviewer_id = %s, reviewer_username = %s, "
+        "review_note = %s, reviewed_at = NOW() WHERE id = %s",
+        (status, session.get("admin_id"), session.get("admin_username", "") or "", note, report_id),
+    )
+    _audit(
+        "report.resolve",
+        target_type="report",
+        target_id=report_id,
+        detail=f"{status}: {note}"[:500],
+    )
+    flash("举报已处理。", "success")
+    return redirect(url_for("reports", **_reports_redirect_args()))
+
+
+@app.route("/reports/<int:report_id>/reopen", methods=["POST"])
+@login_required
+@require_capability(CAP_REPORTS_MANAGE)
+def report_reopen(report_id):
+    report = db.fetch_one(
+        "SELECT id, reporter_id, target_type, target_id FROM reports WHERE id = %s", (report_id,)
+    )
+    if not report:
+        abort(404)
+    # The partial unique index admits one pending report per reporter+target, so
+    # reopening could collide with a newer open report on the same target; that
+    # would surface as a raw 500, so it is refused with a reason instead.
+    clash = db.fetch_one(
+        "SELECT id FROM reports WHERE reporter_id = %s AND target_type = %s "
+        "AND target_id = %s AND status = 'pending' AND id <> %s",
+        (report["reporter_id"], report["target_type"], report["target_id"], report_id),
+    )
+    if clash:
+        flash(f"同一用户对该目标已有待处理举报 #{clash['id']}，无法重新打开。", "error")
+        return redirect(url_for("reports", **_reports_redirect_args()))
+    db.execute(
+        "UPDATE reports SET status = 'pending', reviewer_id = 0, reviewer_username = '', "
+        "review_note = '', reviewed_at = NULL WHERE id = %s",
+        (report_id,),
+    )
+    _audit("report.reopen", target_type="report", target_id=report_id, detail="reopened")
+    flash("举报已重新打开。", "success")
+    return redirect(url_for("reports", **_reports_redirect_args()))
 
 
 # ---------- attachments ----------
